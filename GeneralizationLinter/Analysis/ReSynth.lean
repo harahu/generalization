@@ -440,6 +440,101 @@ def withWeakenedDecl {α : Type} (type : Expr) (n : Nat) (repls : Array Vertex)
 
 
 /--
+Mathlib declarations that build a class from weaker hypotheses, but that are not instances, since
+instance search could not use them (`Module.addCommMonoidToAddCommGroup` does not determine its
+ring) or would loop or slow down on them. `weakeningVacuous` applies them as well as instances,
+since a weakening that one of them undoes is no weakening. Names missing from the environment are
+skipped.
+-/
+def vacuityBridges : Array Name := #[
+  `Module.addCommMonoidToAddCommGroup,     -- a module over a ring is an additive group
+  `NoZeroDivisors.to_isDomain,             -- a nontrivial ring without zero divisors is a domain
+  `IsLeftCancelMulZero.to_isCancelMulZero, -- one-sided cancellation is two-sided when commutative
+  `IsRightCancelMulZero.to_isCancelMulZero,
+  `LeftCancelMonoid.groupOfFinite,         -- a finite cancellative monoid is a group
+  `RightCancelMonoid.groupOfFinite
+]
+
+
+/--
+Tries to build an instance of `goal` by applying the constant `bridge`: its conclusion is unified
+with `goal`, and each of its instance-implicit arguments is synthesized or, failing that, unified
+with one of the local instances, which is what determines arguments that `goal` does not mention.
+Returns `true` iff this assigns every argument, and the result mentions none of `stale`.
+
+---
+**Example**
+
+```
+-- local instances `[AddCommMonoid E] [Module ℂ E]`
+bridgeApplies {} ‹AddCommGroup E› `Module.addCommMonoidToAddCommGroup = true  -- `R := ℂ`
+```
+-/
+def bridgeApplies (stale : HashSet FVarId) (goal : Expr) (bridge : Name) : MetaM Bool :=
+  withNewMCtxDepth do
+  unless (← getEnv).contains bridge do return false
+  let fn ← mkConstWithFreshMVarLevels bridge
+  let (margs, binderInfos, concl) ← forallMetaTelescopeReducing (← inferType fn)
+  unless ← isDefEq concl goal do return false
+  -- As in `mkClassApp?`, discharge instance goals to a fixpoint rather than in binder order.
+  let mut pending := (Array.range margs.size).filter fun i => binderInfos[i]!.isInstImplicit
+  for _ in [0:margs.size + 1] do
+    if pending.isEmpty then break
+    let mut still : Array Nat := #[]
+    for i in pending do
+      let m := margs[i]!.mvarId!
+      if ← m.isAssigned then continue
+      let ty ← instantiateMVars (← inferType margs[i]!)
+      if !ty.hasExprMVar then
+        match ← (try trySynthInstance ty catch _ => pure .none) with
+        | .some inst => m.assign inst
+        | _ => return false
+      else
+        let mut found := false
+        for li in ← getLocalInstances do
+          if ← isDefEq (← inferType li.fvar) ty then
+            m.assign li.fvar
+            found := true
+            break
+        unless found do still := still.push i
+    if still.size == pending.size then break
+    pending := still
+  let result ← instantiateMVars (mkAppN fn margs)
+  return !result.hasExprMVar && !mentions stale result
+
+
+/--
+Returns `true` iff replacing the `n`th targeted binder of `type` with binders for `repls` loses
+nothing: the replaced binder's type can still be built from the replacements and the rest of the
+weakened signature, by instance synthesis or by one of the `vacuityBridges`. The weakened statement
+then applies to no instance the original did not (up to instance coherence), however much weaker
+its binders look. The binders of the original signature from the replaced one onwards are withheld,
+so that an instance built from them does not count.
+
+---
+**Examples**
+
+```
+-- type = ‹∀ {R : Type} [CommRing R] [IsDomain R], True›, with `IsDomain R` the binder at index 1
+-- N = ⟨`Nontrivial, #[#0], .polymorphic⟩, Z = ⟨`NoZeroDivisors, #[#0], .polymorphic⟩
+weakeningVacuous type 1 #[N, Z] = true   -- `IsDomain R` by `NoZeroDivisors.to_isDomain`
+weakeningVacuous type 1 #[Z] = false
+```
+-/
+public def weakeningVacuous (type : Expr) (n : Nat) (repls : Array Vertex) : MetaM Bool := do
+  let vacuous? ← withWeakenedDecl type n repls fun ctx => do
+    let some (_, old) ← getNthTargetedBinder? ctx.oldTelescope n | return none
+    let goal ← instantiateMVars (← inferType old)
+    withReader (fun c => { c with
+        localInstances := c.localInstances.filter (!ctx.stale.contains ·.fvar.fvarId!) }) do
+      if let .some inst ← (try trySynthInstance goal catch _ => pure .none) then
+        let inst ← instantiateMVars inst
+        if !inst.hasExprMVar && !mentions ctx.stale inst then return some true
+      some <$> vacuityBridges.anyM (bridgeApplies ctx.stale goal)
+  return vacuous?.getD false
+
+
+/--
 Verify that, if we replace the `n`th targeted binder in `ciType` with binders for `repls`, the value
 (usually a proof term) `val` can be re-synthesized in the weakened context. If so, returns `true`;
 otherwise, returns `false`.
