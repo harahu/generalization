@@ -399,20 +399,38 @@ Parameters:
 * `k`: Continuation, which receives
   * If `replacements` is empty or `replacements.size ≥ 2`, then an empty map. If `replacements.size
     == 1`, then a map from `tb` to the new binder built for `replacements[0]`.
-  * The array of new replacement binder `Expr`s that were built.
+  * The array of new replacement binder `Expr`s that were built, in the order in which they were
+    built (see below), which need not be the order of `replacements`.
+
+The replacements are built with `tb` withheld from instance synthesis, since a replacement that
+takes its instance arguments from the binder it replaces is not a weakening of it. A replacement
+can instead take them from another replacement: in a split of `[Field F]` into `[Nontrivial F]`,
+`[NoZeroDivisors F]` and `[CommRing F]`, the multiplication and zero that `NoZeroDivisors F` is
+stated for come from `CommRing F`. So each binder is built from one of the replacements that can
+be built from those before it. Adding a binder only makes more of them buildable, so this greedy
+choice builds all of them whenever some order does.
 -/
 def withReplacementBinders {α : Type} (tb : FVarId) (replacements : Array Vertex)
     (k : HashMap FVarId Expr → Array Expr → MetaM (Option α)) : MetaM (Option α) := do
   let oldDecl ← tb.getDecl
   let userName := oldDecl.userName
-  let rec go (i : Nat) (remap : HashMap FVarId Expr) (newBinders : Array Expr) : MetaM (Option α) := do
-    if h : i < replacements.size then
-      let some newBinderType ← replaceBinderType? (← tb.getType) replacements[i] | return none
-      withLocalDecl userName oldDecl.binderInfo newBinderType fun newBinder => do
-        (go (i + 1) (if replacements.size == 1 then remap.insert tb newBinder else remap)
-          (newBinders.push newBinder))
-    else k remap newBinders
-  go 0 {} #[]
+  let oldType ← tb.getType
+  -- The first replacement in `pending` that can be built in the current context, with its index.
+  let buildable? (pending : Array Vertex) : MetaM (Option (Nat × Expr)) :=
+    withoutLocalInstance tb do
+      for h : i in [0:pending.size] do
+        if let some t ← replaceBinderType? oldType pending[i] then return some (i, t)
+      return none
+  let rec go (fuel : Nat) (pending : Array Vertex) (remap : HashMap FVarId Expr)
+      (newBinders : Array Expr) : MetaM (Option α) := do
+    if pending.isEmpty then return ← k remap newBinders
+    let fuel + 1 := fuel | return none
+    let some (i, newBinderType) ← buildable? pending | return none
+    withLocalDecl userName oldDecl.binderInfo newBinderType fun newBinder => do
+      go fuel (pending.eraseIdxIfInBounds i)
+        (if replacements.size == 1 then remap.insert tb newBinder else remap)
+        (newBinders.push newBinder)
+  go replacements.size replacements {} #[]
 
 /-- Helper to initialize the stale sets. -/
 def staleSets (oldFV : FVarId) (post : Array Expr) : HashSet FVarId × HashSet FVarId :=
