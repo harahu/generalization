@@ -452,7 +452,12 @@ def vacuityBridges : Array Name := #[
   `IsLeftCancelMulZero.to_isCancelMulZero, -- one-sided cancellation is two-sided when commutative
   `IsRightCancelMulZero.to_isCancelMulZero,
   `LeftCancelMonoid.groupOfFinite,         -- a finite cancellative monoid is a group
-  `RightCancelMonoid.groupOfFinite
+  `RightCancelMonoid.groupOfFinite,
+  -- in a preadditive category, binary products are binary biproducts
+  `CategoryTheory.Limits.HasBinaryBiproducts.of_hasBinaryProducts,
+  -- a pseudometric space whose topology is T0 is a metric space
+  `MetricSpace.ofT0PseudoMetricSpace,
+  `EMetricSpace.ofT0PseudoEMetricSpace
 ]
 
 
