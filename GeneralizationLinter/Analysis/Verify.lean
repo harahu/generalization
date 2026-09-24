@@ -488,14 +488,14 @@ deriving Inhabited
 
 
 /--
-Given a declaration with constant info `const` and value source code `src.body` (as well as a linter
-config and class graph), return an array of verified, graded weakenings that could be applied to the
-declaration.
+One pass of `gradedWeakenings`: the verified, graded weakenings of `const`, each accepted given the
+ones before it, together with the accepted weakenings as `(binder index, replacements)` pairs, which
+is the form `weakenedStatementType?` takes.
 -/
-public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
-    (src : DeclSource) : TermElabM (Array GradedWeakening) := do
+def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
+    (src : DeclSource) : TermElabM (Array GradedWeakening × Array (Nat × Array Vertex)) := do
   let candidates ← withHeartbeatBudget cfg.generationHeartbeats #[] (guardedCandidates cfg graph const)
-  if candidates.isEmpty then return #[]
+  if candidates.isEmpty then return (#[], #[])
   -- Get the binder names, i.e., for `[inst : Monoid M]`, this would be `` `inst ``. Note that
   -- `TargetedBinder.className` is the name of the _class_, i.e., for `[inst : Monoid M]`, it would
   -- be `` `Monoid ``.
@@ -534,4 +534,96 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
     if let some g := g? then
       accepted := ws
       graded := graded.push g
+  return (graded, accepted)
+
+
+/--
+Tracks, for each targeted binder of a weakened statement in order, the index of the targeted binder
+of the original declaration it stands in for, and its class: `none` while it is still that original
+binder, `some v` once it has been replaced by a binder of class `v`.
+-/
+abbrev BinderTable := Array (Nat × Option Vertex)
+
+
+/--
+Update `table` for the weakenings `accepted`, whose indices are positions in `table`: the binder at
+each such position is replaced by one binder per replacement, all standing in for the same original
+binder, and a dropped binder disappears.
+
+---
+**Example**
+
+```
+applyAccepted #[(0, none), (1, none)] #[(0, #[P, Q])] = #[(0, some P), (0, some Q), (1, none)]
+```
+-/
+def applyAccepted (table : BinderTable) (accepted : Array (Nat × Array Vertex)) : BinderTable :=
+  (Array.range table.size).foldl (init := #[]) fun out j =>
+    match accepted.find? (·.1 == j) with
+    | some (_, repls) => repls.foldl (init := out) fun out r => out.push (table[j]!.1, some r)
+    | none => out.push table[j]!
+
+
+/--
+Given a declaration with constant info `const` and value source code `src.body` (as well as a linter
+config and class graph), return an array of verified, graded weakenings that could be applied to the
+declaration.
+
+Weakening one binder can leave another stronger than the declaration then needs: a mixin stated
+over `[Rich α]` makes `[Rich α]` a requirement until the mixin itself is weakened to one stated over
+something weaker. So once a pass has accepted weakenings, the weakened statement, with its value
+re-elaborated from source, is linted again, until a pass accepts nothing. Each weakening is then
+reported once, per binder of `const`, as what that binder became at the end, and graded against the
+final statement. If the value cannot be re-elaborated from source, there is no value to lint the
+next pass with, and the passes stop there.
+-/
+public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
+    (src : DeclSource) : TermElabM (Array GradedWeakening) := do
+  let (firstGraded, firstAccepted) ← gradedPass cfg graph const src
+  if firstAccepted.isEmpty || !cfg.verify then return firstGraded
+  let binders ← getTargetedBinders const.type
+  let mut table := applyAccepted ((Array.range binders.size).map (·, none)) firstAccepted
+  let mut current := const
+  let mut pending := firstAccepted
+  let mut final? : Option Expr := none
+  let mut passes := 1
+  -- Every pass that accepts something strictly weakens a binder, so this bound is never what stops
+  -- the passes; it only rules out looping on a class graph that is not what we think it is.
+  for _ in [0:binders.size * 8] do
+    let some W ← weakenedStatementType? current pending | break
+    final? := some W
+    let some val ← recompiledAgainst? W src const.levelParams | break
+    current := .thmInfo
+      { name := const.name, levelParams := const.levelParams, type := W, value := val,
+        all := [const.name] }
+    let (_, accepted) ← gradedPass cfg graph current src
+    if accepted.isEmpty then
+      final? := none
+      break
+    table := applyAccepted table accepted
+    pending := accepted
+    passes := passes + 1
+  if passes == 1 then return firstGraded
+  let finalW := final?.getD current.type
+  -- Grade each composed weakening against the final statement.
+  let bodyG := (← recompiledAgainst? finalW src const.levelParams).isSome
+  let conclG ← match src.concl? with
+    | some concl' => conclSourceIntact finalW concl' const.levelParams
+    | none => pure false
+  let binderNames ← targetedBinderTelescope const.type fun lds _ => pure (lds.map (·.userName))
+  let mut graded : Array GradedWeakening := #[]
+  for b in binders do
+    let entries := table.filter (·.1 == b.idx)
+    if entries.size == 1 && entries[0]!.2.isNone then continue
+    let repls := entries.filterMap (·.2)
+    let shape := match repls with
+      | #[] => WeakeningShape.drop
+      | #[v] => WeakeningShape.weaken v
+      | vs => WeakeningShape.split vs
+    let bindersG := match binderNames[b.idx]? with
+      | some n => !src.binders.isEmpty && !bindersMention src.binders n
+      | none => false
+    graded := graded.push
+      { candidate := { binder := b, shape },
+        grade := .holds { binders := bindersG, concl := conclG, body := bodyG } }
   return graded
