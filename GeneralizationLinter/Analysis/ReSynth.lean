@@ -8,6 +8,8 @@ module
 public import Lean.Meta.Basic
 import Lean.Meta.SynthInstance
 import Lean.Structure
+import Lean.Elab.Term
+import Lean.Elab.SyntheticMVars
 
 import Mathlib.Lean.Expr.Basic
 
@@ -508,9 +510,20 @@ partial def assignBridgeInstances (insts : List MVarId) : MetaM Bool := do
 
 
 /--
-Tries to build an instance of `goal` by applying the constant `bridge`: its conclusion is unified
-with `goal`, and its instance-implicit arguments are assigned by `assignBridgeInstances`. Returns
-`true` iff this assigns every argument, and the result mentions none of `stale`.
+Tries to build an instance of `goal` from a bridge of type `type`: the conclusion of `type` is
+unified with `goal`, and its instance-implicit arguments are assigned by `assignBridgeInstances`.
+Returns `true` iff this assigns every argument, and none of them mentions `stale`.
+-/
+def bridgeTypeApplies (stale : HashSet FVarId) (goal type : Expr) : MetaM Bool := do
+  let (margs, binderInfos, concl) ← forallMetaTelescopeReducing type
+  unless ← isDefEq concl goal do return false
+  let insts := (List.range margs.size).filter (binderInfos[·]!.isInstImplicit)
+  unless ← assignBridgeInstances (insts.map (margs[·]!.mvarId!)) do return false
+  (← margs.mapM instantiateMVars).allM fun a => return !a.hasExprMVar && !mentions stale a
+
+
+/--
+Tries to build an instance of `goal` by applying the constant `bridge` (see `bridgeTypeApplies`).
 
 ---
 **Example**
@@ -523,22 +536,76 @@ bridgeApplies {} ‹AddCommGroup M› `Module.addCommMonoidToAddCommGroup = true
 def bridgeApplies (stale : HashSet FVarId) (goal : Expr) (bridge : Name) : MetaM Bool :=
   withNewMCtxDepth do
   unless (← getEnv).contains bridge do return false
-  let fn ← mkConstWithFreshMVarLevels bridge
-  let (margs, binderInfos, concl) ← forallMetaTelescopeReducing (← inferType fn)
-  unless ← isDefEq concl goal do return false
-  let insts := (List.range margs.size).filter (binderInfos[·]!.isInstImplicit)
-  unless ← assignBridgeInstances (insts.map (margs[·]!.mvarId!)) do return false
-  let result ← instantiateMVars (mkAppN fn margs)
-  return !result.hasExprMVar && !mentions stale result
+  bridgeTypeApplies stale goal (← inferType (← mkConstWithFreshMVarLevels bridge))
+
+
+/--
+A bridge that is not a declaration of the linted environment: a statement, in Lean source, that
+some hypotheses imply a class, which `weakeningVacuous` applies as it does `vacuityBridges`. It is
+for facts that Mathlib does not state as a declaration.
+
+A rule is trusted, never proved at the point of use, and a false one would block valid
+suggestions. So every rule must be proved: `proof` names a theorem of `tests/BridgeRules.lean`
+whose type is `statement`, and that test fails for any rule without one. There is no CI here to
+run it, so run it whenever `bridgeRules` changes.
+-/
+public structure BridgeRule where
+  /-- The rule, e.g. `∀ (n : ℕ) [Fintype (ZMod n)], NeZero n`. -/
+  statement : String
+  /-- The theorem of `tests/BridgeRules.lean` proving `statement`. -/
+  proof : Name
+
+
+/--
+The bridge rules (see `BridgeRule`). A rule mentioning a constant that the linted environment lacks
+does not elaborate there, and is skipped.
+-/
+public def bridgeRules : Array BridgeRule := #[
+  -- `ZMod 0 = ℤ` is infinite, so `Fintype (ZMod n)` holds only for `n ≠ 0`
+  { statement := "∀ (n : ℕ) [Fintype (ZMod n)], NeZero n",
+    proof := `GeneralizationLinter.Test.BridgeRules.neZero_of_fintype_zmod }
+]
+
+
+initialize bridgeRuleCacheRef : IO.Ref (HashMap String (Option AbstractMVarsResult)) ←
+  IO.mkRef {}
+
+/--
+The type `r.statement` elaborates to in the current environment, with its universe metavariables
+abstracted, or `none` if it does not elaborate there. It is elaborated in an empty local context, so
+that no local declaration captures an identifier of the statement, and cached per statement, since
+the environment only grows during a run.
+-/
+public def BridgeRule.elaborated? (r : BridgeRule) : MetaM (Option AbstractMVarsResult) := do
+  if let some v := (← bridgeRuleCacheRef.get)[r.statement]? then return v
+  let v ← withLCtx {} #[] do
+    try
+      let .ok stx := Parser.runParserCategory (← getEnv) `term r.statement | return none
+      let e ← Elab.Term.TermElabM.run' do
+        let e ← Elab.Term.withoutErrToSorry (Elab.Term.elabType stx)
+        Elab.Term.synthesizeSyntheticMVarsNoPostponing
+        instantiateMVars e
+      if e.hasExprMVar || e.hasSorry then return none
+      some <$> abstractMVars e
+    catch _ => return none
+  bridgeRuleCacheRef.modify (·.insert r.statement v)
+  return v
+
+
+/-- Tries to build an instance of `goal` by applying the rule `r` (see `bridgeTypeApplies`). -/
+def ruleApplies (stale : HashSet FVarId) (goal : Expr) (r : BridgeRule) : MetaM Bool :=
+  withNewMCtxDepth do
+  let some abst ← r.elaborated? | return false
+  bridgeTypeApplies stale goal (← openAbstractMVarsResult abst).2.2
 
 
 /--
 Returns `true` iff replacing the `n`th targeted binder of `type` with binders for `repls` loses
 nothing: the replaced binder's type can still be built from the replacements and the rest of the
-weakened signature, by instance synthesis or by one of the `vacuityBridges`. The weakened statement
-then applies to no instance the original did not (up to instance coherence), however much weaker
-its binders look. The binders of the original signature from the replaced one onwards are withheld,
-so that an instance built from them does not count.
+weakened signature, by instance synthesis, one of the `vacuityBridges` or one of the `bridgeRules`.
+The weakened statement then applies to no instance the original did not (up to instance coherence),
+however much weaker its binders look. The binders of the original signature from the replaced one
+onwards are withheld, so that an instance built from them does not count.
 
 ---
 **Examples**
@@ -559,7 +626,8 @@ public def weakeningVacuous (type : Expr) (n : Nat) (repls : Array Vertex) : Met
       if let .some inst ← (try trySynthInstance goal catch _ => pure .none) then
         let inst ← instantiateMVars inst
         if !inst.hasExprMVar && !mentions ctx.stale inst then return some true
-      some <$> vacuityBridges.anyM (bridgeApplies ctx.stale goal)
+      if ← vacuityBridges.anyM (bridgeApplies ctx.stale goal) then return some true
+      some <$> bridgeRules.anyM (ruleApplies ctx.stale goal)
   return vacuous?.getD false
 
 
