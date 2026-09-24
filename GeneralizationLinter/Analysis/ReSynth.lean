@@ -452,22 +452,54 @@ def vacuityBridges : Array Name := #[
   `IsLeftCancelMulZero.to_isCancelMulZero, -- one-sided cancellation is two-sided when commutative
   `IsRightCancelMulZero.to_isCancelMulZero,
   `LeftCancelMonoid.groupOfFinite,         -- a finite cancellative monoid is a group
-  `RightCancelMonoid.groupOfFinite
+  `RightCancelMonoid.groupOfFinite,
+  -- in a preadditive category, binary products are binary biproducts
+  `CategoryTheory.Limits.HasBinaryBiproducts.of_hasBinaryProducts,
+  -- a pseudometric space whose topology is T0 is a metric space
+  `MetricSpace.ofT0PseudoMetricSpace,
+  `EMetricSpace.ofT0PseudoEMetricSpace
 ]
 
 
 /--
+Assigns the instance metavariables `insts`: one whose type is free of metavariables is synthesized,
+and otherwise one of them is unified with a local instance, which is what determines the arguments
+that the goal of `bridgeApplies` does not mention. The choice of local instance is backtracked, since
+the first that unifies can be the wrong one: in `Module.addCommMonoidToAddCommGroup`, `[Ring ?R]`
+unifies with any ring in scope, and only `[Module ?R M]` picks out the right one. Returns `true` iff
+every metavariable in `insts` ends up assigned.
+-/
+partial def assignBridgeInstances (insts : List MVarId) : MetaM Bool := do
+  let pending ← insts.filterM fun m => return !(← m.isAssigned)
+  if pending.isEmpty then return true
+  for m in pending do
+    let ty ← instantiateMVars (← inferType (.mvar m))
+    unless ty.hasExprMVar do
+      let .some inst ← (try trySynthInstance ty catch _ => pure .none) | return false
+      m.assign inst
+      return ← assignBridgeInstances pending
+  for m in pending do
+    let ty ← instantiateMVars (← inferType (.mvar m))
+    for li in ← getLocalInstances do
+      let saved ← saveState
+      if ← isDefEq (← inferType li.fvar) ty then
+        m.assign li.fvar
+        if ← assignBridgeInstances pending then return true
+      saved.restore
+  return false
+
+
+/--
 Tries to build an instance of `goal` by applying the constant `bridge`: its conclusion is unified
-with `goal`, and each of its instance-implicit arguments is synthesized or, failing that, unified
-with one of the local instances, which is what determines arguments that `goal` does not mention.
-Returns `true` iff this assigns every argument, and the result mentions none of `stale`.
+with `goal`, and its instance-implicit arguments are assigned by `assignBridgeInstances`. Returns
+`true` iff this assigns every argument, and the result mentions none of `stale`.
 
 ---
 **Example**
 
 ```
--- local instances `[AddCommMonoid E] [Module ℂ E]`
-bridgeApplies {} ‹AddCommGroup E› `Module.addCommMonoidToAddCommGroup = true  -- `R := ℂ`
+-- local instances `[CommRing R] [Ring A] [AddCommMonoid M] [Module R M]`
+bridgeApplies {} ‹AddCommGroup M› `Module.addCommMonoidToAddCommGroup = true  -- `R := R`, not `A`
 ```
 -/
 def bridgeApplies (stale : HashSet FVarId) (goal : Expr) (bridge : Name) : MetaM Bool :=
@@ -476,29 +508,8 @@ def bridgeApplies (stale : HashSet FVarId) (goal : Expr) (bridge : Name) : MetaM
   let fn ← mkConstWithFreshMVarLevels bridge
   let (margs, binderInfos, concl) ← forallMetaTelescopeReducing (← inferType fn)
   unless ← isDefEq concl goal do return false
-  -- As in `mkClassApp?`, discharge instance goals to a fixpoint rather than in binder order.
-  let mut pending := (Array.range margs.size).filter fun i => binderInfos[i]!.isInstImplicit
-  for _ in [0:margs.size + 1] do
-    if pending.isEmpty then break
-    let mut still : Array Nat := #[]
-    for i in pending do
-      let m := margs[i]!.mvarId!
-      if ← m.isAssigned then continue
-      let ty ← instantiateMVars (← inferType margs[i]!)
-      if !ty.hasExprMVar then
-        match ← (try trySynthInstance ty catch _ => pure .none) with
-        | .some inst => m.assign inst
-        | _ => return false
-      else
-        let mut found := false
-        for li in ← getLocalInstances do
-          if ← isDefEq (← inferType li.fvar) ty then
-            m.assign li.fvar
-            found := true
-            break
-        unless found do still := still.push i
-    if still.size == pending.size then break
-    pending := still
+  let insts := (List.range margs.size).filter (binderInfos[·]!.isInstImplicit)
+  unless ← assignBridgeInstances (insts.map (margs[·]!.mvarId!)) do return false
   let result ← instantiateMVars (mkAppN fn margs)
   return !result.hasExprMVar && !mentions stale result
 
