@@ -90,6 +90,8 @@ public structure LinterConfig where
 
   generalityGuard : Bool := true
 
+  strictnessGuard : Bool := true
+
 deriving Inhabited
 
 
@@ -174,6 +176,13 @@ public register_option generalizeTypeclasses.redundancyGuard : Bool := {
     weakenings should become \"drop\" suggestions instead. Not all vacuity is detected."
 }
 
+public register_option generalizeTypeclasses.strictnessGuard : Bool := {
+  defValue := true,
+  descr := "whether weakenings should be blocked when the original hypothesis can still be
+    synthesized from the weakened one and the rest of the signature, so that the weakened statement
+    applies to nothing new. Only vacuity that instance synthesis can see is detected."
+}
+
 public register_option generalizeTypeclasses.stats : Bool := {
   defValue := false,
   descr := "[For experiments only] log a GL_STATS info message for each linted declaration."
@@ -202,5 +211,6 @@ public def LinterConfig.ofOptions (opts : Lean.Options) : LinterConfig :=
     includeSubsumers := generalizeTypeclasses.includeSubsumers.get opts,
     conclusionGuard := generalizeTypeclasses.conclusionGuard.get opts,
     redundancyGuard := generalizeTypeclasses.redundancyGuard.get opts,
-    generalityGuard := generalizeTypeclasses.generalityGuard.get opts
+    generalityGuard := generalizeTypeclasses.generalityGuard.get opts,
+    strictnessGuard := generalizeTypeclasses.strictnessGuard.get opts
   }

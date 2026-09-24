@@ -491,6 +491,22 @@ deriving Inhabited
 
 
 /--
+Does `candidate` weaken nothing (see `weakeningVacuous`), given that the weakenings in `accepted` are
+applied as well? A check that runs out of heartbeats counts as a no: vacuity is then unconfirmed, and
+the weakening already passed verification.
+-/
+def weakeningVacuousGiven (const : ConstantInfo) (accepted : Array (Nat × Array Vertex))
+    (candidate : Candidate) : TermElabM Bool :=
+  tryCatchRuntimeEx (do
+    let some type ← weakenedStatementType? const accepted | return false
+    -- Each accepted weakening of an earlier binder replaced it with as many targeted binders as it
+    -- has replacements, shifting the index of every later one.
+    let idx := accepted.foldl (init := (candidate.binder.idx : Int)) fun i (j, repls) =>
+      if j < candidate.binder.idx then i + repls.size - 1 else i
+    weakeningVacuous type idx.toNat candidate.replacements) (fun _ => pure false)
+
+
+/--
 Given a declaration with constant info `const` and value source code `src.body` (as well as a linter
 config and class graph), return an array of verified, graded weakenings that could be applied to the
 declaration.
@@ -527,6 +543,8 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
       if !bodyG then
         if !accepted.isEmpty then return none
         unless ← weakeningHolds const candidate do return none
+      if cfg.strictnessGuard && !candidate.replacements.isEmpty then
+        if ← weakeningVacuousGiven const accepted candidate then return none
       let conclG ← match src.concl? with
         | some concl' => conclSourceIntact W concl' const.levelParams
         | none => pure false
