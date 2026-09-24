@@ -67,6 +67,14 @@ public structure LinterConfig where
   generationHeartbeats : Nat := 4_000_000
 
   /--
+  The `maxHeartbeats` a build gives each declaration, in the same units as `maxHeartbeats`. When
+  nonzero, a proof is re-elaborated against a weakened statement under this budget, and a proof that
+  runs out of it counts as one that does not re-elaborate, since it would not compile as it stands,
+  rather than as a truncated analysis. Set this to 0 to turn this off.
+  -/
+  buildHeartbeats : Nat := 0
+
+  /--
   Controls whether typeclass weakenings that would involve splitting a single hypothesis into
   multiple weaker ones should be suggested.
 
@@ -128,6 +136,14 @@ public register_option generalizeTypeclasses.perCandidateHeartbeats : Nat := {
   defValue := 4_000_000,
   descr := "how many heartbeats the linter may spend verifying a single weakening candidate. Set
     this to 0 to remove this limit. Defaults to 4_000_000."
+}
+
+public register_option generalizeTypeclasses.buildHeartbeats : Nat := {
+  defValue := 0,
+  descr := "the `maxHeartbeats` a build gives each declaration, in the same units as
+    `maxHeartbeats`. When nonzero, a proof is re-elaborated against a weakened statement under this
+    budget, and a proof that runs out of it counts as one that does not re-elaborate, rather than as
+    a truncated analysis. Set this to 0 to turn this off. Defaults to 0."
 }
 
 public register_option generalizeTypeclasses.acceptOmits : Bool := {
@@ -207,6 +223,7 @@ public def LinterConfig.ofOptions (opts : Lean.Options) : LinterConfig :=
       (SplitPolicy.ofString? (generalizeTypeclasses.splitPolicy.get opts)).getD .forbid,
     generationHeartbeats := generalizeTypeclasses.generationHeartbeats.get opts,
     perCandidateHeartbeats := generalizeTypeclasses.perCandidateHeartbeats.get opts,
+    buildHeartbeats := generalizeTypeclasses.buildHeartbeats.get opts,
     verify := generalizeTypeclasses.verify.get opts,
     includeSubsumers := generalizeTypeclasses.includeSubsumers.get opts,
     conclusionGuard := generalizeTypeclasses.conclusionGuard.get opts,

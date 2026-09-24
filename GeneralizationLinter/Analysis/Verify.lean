@@ -257,14 +257,35 @@ deriving Inhabited
 
 
 /--
+Run `x` under a fresh allowance of `buildHeartbeats` (in the units of `maxHeartbeats`), returning
+`dflt` if it runs out of it, or out of any other resource a build would also run out of. When the
+ambient allowance has less left than that, `x` runs under the ambient one as is, so that running out
+of it still counts as a truncated analysis. If `buildHeartbeats` is `0`, runs `x` directly.
+-/
+def withBuildBudget {α : Type} (buildHeartbeats : Nat) (dflt : α) (x : TermElabM α) :
+    TermElabM α := do
+  if buildHeartbeats == 0 then return ← x
+  let budget := buildHeartbeats * 1000
+  let ctx ← readThe Core.Context
+  let used := (← IO.getNumHeartbeats) - ctx.initHeartbeats
+  if ctx.maxHeartbeats != 0 && ctx.maxHeartbeats - used ≤ budget then return ← x
+  tryCatchRuntimeEx
+    (withTheReader Core.Context (fun c => { c with maxHeartbeats := budget }) (withCurrHeartbeats x))
+    (fun _ => pure dflt)
+
+
+/--
 Given a weakened declaration `W` of the form `‹binders› : concl` (where `concl` is the same as the
 original declaration's), re-elaborate the declaration's value's source code (`src.body`, usually
 corresponding to a proof term) into `val` and type-check that we have `val : concl`. Return `some
 val` if successful, or `none` otherwise.
+
+With `buildHeartbeats` nonzero, the re-elaboration gets the budget a build would give it (see
+`LinterConfig.buildHeartbeats`), and running out of it returns `none`: the value would not compile.
 -/
-public def recompiledAgainst? (W : Expr) (src : DeclSource) (levelNames : List Name := []) :
-    TermElabM (Option Expr) :=
-  suppressingDiagnostics do
+public def recompiledAgainst? (W : Expr) (src : DeclSource) (levelNames : List Name := [])
+    (buildHeartbeats : Nat := 0) : TermElabM (Option Expr) :=
+  withBuildBudget buildHeartbeats none <| suppressingDiagnostics do
   try withLevelNames ((← getLevelNames) ++ levelNames) do
     -- `depth?` tells `Meta.forallBoundedTelescope` when to stop telescoping, so that `concl` may
     -- actually match `src.concl?`.
@@ -539,7 +560,7 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       -- a weakened `instance` must still admit as one, or the printed edit does not compile
       unless ← stillAdmissibleInstance const.name W const.levelParams do return none
       -- Compute weakening grade.
-      let bodyG := (← recompiledAgainst? W src const.levelParams).isSome
+      let bodyG := (← recompiledAgainst? W src const.levelParams cfg.buildHeartbeats).isSome
       if !bodyG then
         if !accepted.isEmpty then return none
         unless ← weakeningHolds const candidate do return none
@@ -616,7 +637,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
   for _ in [0:binders.size * 8] do
     let some W ← weakenedStatementType? current pending | break
     final? := some W
-    let some val ← recompiledAgainst? W src const.levelParams | break
+    let some val ← recompiledAgainst? W src const.levelParams cfg.buildHeartbeats | break
     current := .thmInfo
       { name := const.name, levelParams := const.levelParams, type := W, value := val,
         all := [const.name] }
@@ -630,7 +651,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
   if passes == 1 then return firstGraded
   let finalW := final?.getD current.type
   -- Grade each composed weakening against the final statement.
-  let bodyG := (← recompiledAgainst? finalW src const.levelParams).isSome
+  let bodyG := (← recompiledAgainst? finalW src const.levelParams cfg.buildHeartbeats).isSome
   let conclG ← match src.concl? with
     | some concl' => conclSourceIntact finalW concl' const.levelParams
     | none => pure false
