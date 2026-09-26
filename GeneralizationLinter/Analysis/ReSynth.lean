@@ -486,10 +486,12 @@ def vacuityBridges : Array Name := #[
 /--
 Assigns the instance metavariables `insts`: one whose type is free of metavariables is synthesized,
 and otherwise one of them is unified with a local instance, which is what determines the arguments
-that the goal of `bridgeApplies` does not mention. The choice of local instance is backtracked, since
-the first that unifies can be the wrong one: in `Module.addCommMonoidToAddCommGroup`, `[Ring ?R]`
-unifies with any ring in scope, and only `[Module ?R M]` picks out the right one. Returns `true` iff
-every metavariable in `insts` ends up assigned.
+that the goal of `bridgeApplies` does not mention. A local instance for a family, such as
+`[∀ i, Module R (N i)]`, is applied to fresh arguments first, so that it matches `Module ?R (N i)`.
+The choice of local instance is backtracked, since the first that unifies can be the wrong one: in
+`Module.addCommMonoidToAddCommGroup`, `[Ring ?R]` unifies with any ring in scope, and only
+`[Module ?R M]` picks out the right one. Returns `true` iff every metavariable in `insts` ends up
+assigned.
 -/
 partial def assignBridgeInstances (insts : List MVarId) : MetaM Bool := do
   let pending ← insts.filterM fun m => return !(← m.isAssigned)
@@ -504,9 +506,12 @@ partial def assignBridgeInstances (insts : List MVarId) : MetaM Bool := do
     let ty ← instantiateMVars (← inferType (.mvar m))
     for li in ← getLocalInstances do
       let saved ← saveState
-      if ← isDefEq (← inferType li.fvar) ty then
-        m.assign li.fvar
-        if ← assignBridgeInstances pending then return true
+      let (args, _, liTy) ← forallMetaTelescopeReducing (← inferType li.fvar)
+      if ← isDefEq liTy ty then
+        let v ← instantiateMVars (mkAppN li.fvar args)
+        if !v.hasExprMVar then
+          m.assign v
+          if ← assignBridgeInstances pending then return true
       saved.restore
   return false
 
@@ -628,8 +633,10 @@ public def weakeningVacuous (type : Expr) (n : Nat) (repls : Array Vertex) : Met
       if let .some inst ← (try trySynthInstance goal catch _ => pure .none) then
         let inst ← instantiateMVars inst
         if !inst.hasExprMVar && !mentions ctx.stale inst then return some true
-      if ← vacuityBridges.anyM (bridgeApplies ctx.stale goal) then return some true
-      some <$> bridgeRules.anyM (ruleApplies ctx.stale goal)
+      -- A family `∀ i, C (N i)` is undone pointwise: open it, and bridge its body.
+      some <$> forallTelescopeReducing goal fun _ body => do
+        if ← vacuityBridges.anyM (bridgeApplies ctx.stale body) then return true
+        bridgeRules.anyM (ruleApplies ctx.stale body)
   return vacuous?.getD false
 
 
