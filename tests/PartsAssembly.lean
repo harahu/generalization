@@ -28,16 +28,16 @@ Note: This linter can be disabled with `set_option linter.generalizeTypeclasses 
 set_option linter.generalizeTypeclasses true in
 set_option generalizeTypeclasses.splitPolicy "allow" in
 set_option generalizeTypeclasses.strictnessGuard false in
-theorem continuous_mul_inv {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] :
-    Continuous fun p : G × G ↦ p.1 * p.2⁻¹ := by
-  fun_prop
+theorem continuous_mul_inv {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] (g : G) :
+    g * g⁻¹ = 1 ∧ Continuous fun p : G × G ↦ p.1 * p.2⁻¹ :=
+  ⟨mul_inv_cancel g, by fun_prop⟩
 
 #guard_msgs in
 set_option linter.generalizeTypeclasses true in
 set_option generalizeTypeclasses.splitPolicy "allow" in
-theorem continuous_mul_inv' {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] :
-    Continuous fun p : G × G ↦ p.1 * p.2⁻¹ := by
-  fun_prop
+theorem continuous_mul_inv' {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] (g : G) :
+    g * g⁻¹ = 1 ∧ Continuous fun p : G × G ↦ p.1 * p.2⁻¹ :=
+  ⟨mul_inv_cancel g, by fun_prop⟩
 
 /-! ### A weakening to one parent is not a split into all of them -/
 
@@ -49,8 +49,8 @@ Note: This linter can be disabled with `set_option linter.generalizeTypeclasses 
 #guard_msgs in
 set_option linter.generalizeTypeclasses true in
 set_option generalizeTypeclasses.splitPolicy "allow" in
-theorem continuous_mul' {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] :
-    Continuous fun p : G × G ↦ p.1 * p.2 := by
-  fun_prop
+theorem continuous_mul' {G : Type} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] (g : G) :
+    g * g⁻¹ = 1 ∧ Continuous fun p : G × G ↦ p.1 * p.2 :=
+  ⟨mul_inv_cancel g, by fun_prop⟩
 
 end GeneralizationLinter.Test.PartsAssembly
