@@ -8,6 +8,9 @@ module
 public import Lean.Meta.Basic
 import Lean.Meta.SynthInstance
 import Lean.Structure
+import Lean.Elab.Term
+import Lean.Elab.SyntheticMVars
+import Lean.Elab.BuiltinNotation
 
 import Mathlib.Lean.Expr.Basic
 
@@ -515,6 +518,48 @@ def bridgeApplies (stale : HashSet FVarId) (goal : Expr) (bridge : Name) : MetaM
 
 
 /--
+Tries to build `goal`, an instance of a structure class, from instances of its parent classes
+alone: each parent is synthesized, and the structure instance `{ p₁, …, pₙ with }` is elaborated
+from them. This succeeds exactly when the class bundles its parents and nothing more, as
+`IsTopologicalGroup` bundles `ContinuousMul` and `ContinuousInv`. Returns `true` iff it succeeds
+and the instance built mentions nothing in `stale`.
+
+---
+**Example**
+
+```
+-- local instances `[Group G] [TopologicalSpace G] [ContinuousMul G] [ContinuousInv G]`
+assembledFromParents {} ‹IsTopologicalGroup G› = true
+-- local instances `[Group G] [TopologicalSpace G] [ContinuousMul G]`
+assembledFromParents {} ‹IsTopologicalGroup G› = false
+```
+-/
+def assembledFromParents (stale : HashSet FVarId) (goal : Expr) : MetaM Bool := do
+  let .const cls _ := goal.getAppFn | return false
+  let env ← getEnv
+  unless isClass env cls && isStructure env cls do return false
+  let parents := getStructureParentInfo env cls
+  if parents.isEmpty then return false
+  try
+    let insts ← parents.mapM fun p => do
+      let (xs, _, parentTy) ← forallMetaTelescopeReducing (← inferType
+        (← mkConstWithFreshMVarLevels p.projFn))
+      unless ← isDefEq (← inferType xs.back!) goal do throwError "no parent"
+      let parentTy ← instantiateMVars parentTy
+      if parentTy.hasExprMVar then throwError "no parent"
+      let .some inst ← trySynthInstance parentTy | throwError "no parent"
+      return inst
+    let v ← Elab.Term.TermElabM.run' do
+      let srcs ← insts.mapM fun inst => Elab.Term.exprToSyntax inst
+      let stx ← `({ $srcs,* with })
+      let v ← Elab.Term.elabTermEnsuringType stx goal
+      Elab.Term.synthesizeSyntheticMVarsNoPostponing
+      instantiateMVars v
+    return !v.hasExprMVar && !mentions stale v
+  catch _ => return false
+
+
+/--
 Returns `true` iff replacing the `n`th targeted binder of `type` with binders for `repls` loses
 nothing: the replaced binder's type can still be built from the replacements and the rest of the
 weakened signature, by instance synthesis or by one of the `vacuityBridges`. The weakened statement
@@ -541,7 +586,8 @@ public def weakeningVacuous (type : Expr) (n : Nat) (repls : Array Vertex) : Met
       if let .some inst ← (try trySynthInstance goal catch _ => pure .none) then
         let inst ← instantiateMVars inst
         if !inst.hasExprMVar && !mentions ctx.stale inst then return some true
-      some <$> vacuityBridges.anyM (bridgeApplies ctx.stale goal)
+      if ← vacuityBridges.anyM (bridgeApplies ctx.stale goal) then return some true
+      some <$> assembledFromParents ctx.stale goal
   return vacuous?.getD false
 
 
