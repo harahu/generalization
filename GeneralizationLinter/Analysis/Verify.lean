@@ -332,6 +332,10 @@ public def recompiledAgainst? (W : Expr) (src : DeclSource) (levelNames : List N
 /--
 Check that re-elaborated conclusion is definitionally equal to the old conclusion.
 
+With `buildHeartbeats` nonzero, the re-elaboration gets the budget a build would give it (see
+`LinterConfig.buildHeartbeats`), and running out of it returns `false`: the conclusion would not
+compile.
+
 ---
 **Implementation notes**
 
@@ -356,9 +360,9 @@ conclusion, which yields `∀ (c : α) (t₁ : a = b) (t₂ : b = c), a = c`. We
 "full" old conclusion `Expr` is definitionally equal to `newConcl`, and receive a verdict that is
 informative to us, and not simply `false` because of a mismatch in `∀`-arity of the expressions.
 -/
-public def conclSourceIntact (W : Expr) (conclStx : Syntax) (levelNames : List Name := []) :
-    TermElabM Bool :=
-  suppressingDiagnostics do
+public def conclSourceIntact (W : Expr) (conclStx : Syntax) (levelNames : List Name := [])
+    (buildHeartbeats : Nat := 0) : TermElabM Bool :=
+  withBuildBudget buildHeartbeats false <| suppressingDiagnostics do
   try
     withLevelNames ((← getLevelNames) ++ levelNames) do
       Meta.forallTelescope W fun args shortConcl => do
@@ -372,7 +376,8 @@ public def conclSourceIntact (W : Expr) (conclStx : Syntax) (levelNames : List N
     catch e =>
       -- We don't want a timeout here to lead to a claim that "the conclusion would have to be
       -- modified" (we don't know whether that's true or not at this point), but rather just to
-      -- dropping the candidate altogether.
+      -- dropping the candidate altogether. Within the budget of a build (`buildHeartbeats`), it is
+      -- true: the conclusion would not compile as it stands.
       if e.isRuntime then throw e else return false
 
 
@@ -567,7 +572,7 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       if cfg.strictnessGuard && !candidate.replacements.isEmpty then
         if ← weakeningVacuousGiven const accepted candidate then return none
       let conclG ← match src.concl? with
-        | some concl' => conclSourceIntact W concl' const.levelParams
+        | some concl' => conclSourceIntact W concl' const.levelParams cfg.buildHeartbeats
         | none => pure false
       let bindersG := match binderNames[candidate.binder.idx]? with
         | some n => !src.binders.isEmpty && !bindersMention src.binders n
@@ -653,7 +658,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
   -- Grade each composed weakening against the final statement.
   let bodyG := (← recompiledAgainst? finalW src const.levelParams cfg.buildHeartbeats).isSome
   let conclG ← match src.concl? with
-    | some concl' => conclSourceIntact finalW concl' const.levelParams
+    | some concl' => conclSourceIntact finalW concl' const.levelParams cfg.buildHeartbeats
     | none => pure false
   let binderNames ← targetedBinderTelescope const.type fun lds _ => pure (lds.map (·.userName))
   let mut graded : Array GradedWeakening := #[]
