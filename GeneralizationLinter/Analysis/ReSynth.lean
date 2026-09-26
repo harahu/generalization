@@ -477,7 +477,9 @@ def vacuityBridges : Array Name := #[
   `CategoryTheory.Limits.HasBinaryBiproducts.of_hasBinaryProducts,
   -- a pseudometric space whose topology is T0 is a metric space
   `MetricSpace.ofT0PseudoMetricSpace,
-  `EMetricSpace.ofT0PseudoEMetricSpace
+  `EMetricSpace.ofT0PseudoEMetricSpace,
+  -- a finite Galois group makes the extension Galois
+  `IsGaloisGroup.isGalois
 ]
 
 
