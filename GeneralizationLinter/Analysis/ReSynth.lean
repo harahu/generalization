@@ -42,6 +42,15 @@ structure ReSynthContext where
   stale : HashSet FVarId
   /-- Set containing the fvar of the targeted binder. Note that `staleW ⊆ stale`. -/
   staleW : HashSet FVarId
+  /--
+  Results of `reSynthArg`, keyed by the argument and the innermost local declaration in scope.
+  Elaborated terms share their instance subterms, so without it the same argument is rebuilt, and
+  the same instance synthesized, once for every occurrence. The local declaration is part of the
+  key because a synthesis under a binder can use that binder, so its result is only valid there.
+  `remap` only ever grows by binders that later arguments can mention, so it needs no part in the
+  key.
+  -/
+  cache : IO.Ref (HashMap (Expr × Option FVarId) Expr)
 
 
 /-- Context established by `withWeakenedDecl` and handed to its continuation. -/
@@ -263,6 +272,16 @@ partial def ReSynthContext.reSynthArg (ctx : ReSynthContext) (arg : Expr) :
     MetaM Expr := do
   -- If `arg` doesn't mention _any_ stale fvars, we just return it as is; nothing to update.
   unless mentions ctx.stale arg do return arg
+  let key := (arg, (← getLCtx).lastDecl.map (·.fvarId))
+  if let some arg' := (← ctx.cache.get)[key]? then return arg'
+  let arg' ← ctx.reSynthArgUncached arg
+  ctx.cache.modify (·.insert key arg')
+  return arg'
+
+
+/-- `reSynthArg` without its cache. -/
+partial def ReSynthContext.reSynthArgUncached (ctx : ReSynthContext) (arg : Expr) :
+    MetaM Expr := do
   -- If `arg` doesn't mention any weakened binders, we just need to remap the fvars (which
   -- `reSynthExpr` will do for us), but don't have to (and in fact shouldn't) try to re-synthesize
   -- `arg` or anything within it.
@@ -455,7 +474,7 @@ def withWeakenedDecl {α : Type} (type : Expr) (n : Nat) (repls : Array Vertex)
     let (staleW, stale) := staleSets oldFV post
     withReplacementBinders oldFV repls fun remap₀ newBinders =>
       withoutLocalInstance oldFV do
-        let rsCtx₀ : ReSynthContext := { remap := remap₀, stale, staleW }
+        let rsCtx₀ : ReSynthContext := { remap := remap₀, stale, staleW, cache := ← IO.mkRef {} }
         rsCtx₀.reSynthTelescope post.toList fun rsCtx rebuiltPost =>
           k { toReSynthContext := rsCtx, oldTelescope := args, pre, newBinders, rebuiltPost, concl }
 
