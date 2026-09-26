@@ -53,4 +53,21 @@ theorem continuous_mul' {G : Type} [Group G] [TopologicalSpace G] [IsTopological
     g * g⁻¹ = 1 ∧ Continuous fun p : G × G ↦ p.1 * p.2 :=
   ⟨mul_inv_cancel g, by fun_prop⟩
 
+/-! ### A class with a field of its own is not rebuilt from its parent -/
+
+class Base (α : Type) where
+  x : α
+
+class Rich (α : Type) extends Base α where
+  y : α
+
+/--
+warning: the `[Rich α]` hypothesis of `GeneralizationLinter.Test.PartsAssembly.base_eq` can be weakened to `Base α`.
+
+Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
+-/
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+theorem base_eq {α : Type} [Rich α] : (Base.x : α) = Base.x := rfl
+
 end GeneralizationLinter.Test.PartsAssembly
