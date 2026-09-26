@@ -110,7 +110,9 @@ class P (α : Type) : Prop where
 class Q (α : Type) : Prop where
   q : True
 
-class PQ (α : Type) : Prop extends P α, Q α
+/-- `PQ` has a field of its own, so that splitting it into `P` and `Q` is a genuine weakening. -/
+class PQ (α : Type) : Prop extends P α, Q α where
+  pq : True
 
 theorem useP (α : Type) [P α] : True := trivial
 
