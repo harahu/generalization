@@ -526,15 +526,15 @@ A bridge that is not a declaration of the linted environment: a statement, in Le
 some hypotheses imply a class, which `weakeningVacuous` applies as it does `vacuityBridges`. It is
 for facts that Mathlib does not state as a declaration.
 
-A rule is trusted, never proved at the point of use, and a false one would block valid
-suggestions. So every rule must be proved: `proof` names a theorem of `tests/BridgeRules.lean`
-whose type is `statement`, and that test fails for any rule without one. There is no CI here to
-run it, so run it whenever `bridgeRules` changes.
+A rule is trusted, never proved at the point of use, and a false one would block valid suggestions.
+So every rule must be proved: `proof` names a declaration of `tests/BridgeRules.lean` whose type is
+`statement` (a definition, for a rule concluding a data-carrying class), and that test fails for any
+rule without one. There is no CI here to run it, so run it whenever `bridgeRules` changes.
 -/
 public structure BridgeRule where
   /-- The rule, e.g. `∀ (n : ℕ) [Fintype (ZMod n)], NeZero n`. -/
   statement : String
-  /-- The theorem of `tests/BridgeRules.lean` proving `statement`. -/
+  /-- The declaration of `tests/BridgeRules.lean` proving `statement`. -/
   proof : Name
 
 
@@ -545,7 +545,31 @@ does not elaborate there, and is skipped.
 public def bridgeRules : Array BridgeRule := #[
   -- `ZMod 0 = ℤ` is infinite, so `Fintype (ZMod n)` holds only for `n ≠ 0`
   { statement := "∀ (n : ℕ) [Fintype (ZMod n)], NeZero n",
-    proof := `GeneralizationLinter.Test.BridgeRules.neZero_of_fintype_zmod }
+    proof := `GeneralizationLinter.Test.BridgeRules.neZero_of_fintype_zmod },
+  -- a seminormed group or ring whose topology is T0 is normed
+  { statement := "∀ (E : Type _) [SeminormedAddCommGroup E] [T0Space E], NormedAddCommGroup E",
+    proof := `GeneralizationLinter.Test.BridgeRules.normedAddCommGroup_of_t0 },
+  { statement := "∀ (R : Type _) [SeminormedRing R] [T0Space R], NormedRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.normedRing_of_t0 },
+  -- a commutative ring that is simple is a field
+  { statement := "∀ (R : Type _) [CommRing R] [IsSimpleRing R], Field R",
+    proof := `GeneralizationLinter.Test.BridgeRules.field_of_isSimpleRing },
+  -- a second countable, T0, completely pseudo-metrizable space is Polish
+  { statement := "∀ (X : Type _) [TopologicalSpace X] [SecondCountableTopology X] [T0Space X] \
+      [TopologicalSpace.IsCompletelyPseudoMetrizableSpace X], PolishSpace X",
+    proof :=
+      `GeneralizationLinter.Test.BridgeRules.polishSpace_of_isCompletelyPseudoMetrizableSpace },
+  -- negation is `0 - x`, and addition is `x - -y`
+  { statement := "∀ (G : Type _) [AddGroup G] [TopologicalSpace G] [ContinuousAdd G] \
+      [ContinuousSub G], IsTopologicalAddGroup G",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalAddGroup_of_continuousSub },
+  { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [ContinuousSub R] [ContinuousNeg R] \
+      [ContinuousMul R], IsTopologicalRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalRing_of_continuousSub },
+  -- over a ring, a nonarchimedean additive group with continuous multiplication
+  { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [NonarchimedeanAddGroup R] \
+      [ContinuousMul R], NonarchimedeanRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.nonarchimedeanRing_of_nonarchimedeanAddGroup }
 ]
 
 
