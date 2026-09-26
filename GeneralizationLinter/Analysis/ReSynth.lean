@@ -549,13 +549,16 @@ def assembledFromParents (stale : HashSet FVarId) (goal : Expr) : MetaM Bool := 
       if parentTy.hasExprMVar then throwError "no parent"
       let .some inst ← trySynthInstance parentTy | throwError "no parent"
       return inst
-    let v ← Elab.Term.TermElabM.run' do
+    -- The elaborator logs a missing field instead of throwing, and fills it with `sorry`, unless
+    -- error recovery is off; its messages must not reach the linted file either.
+    withoutModifyingState do
+    let v ← Elab.Term.TermElabM.run' <| Elab.Term.withoutErrToSorry do
       let srcs ← insts.mapM fun inst => Elab.Term.exprToSyntax inst
       let stx ← `({ $srcs,* with })
       let v ← Elab.Term.elabTermEnsuringType stx goal
       Elab.Term.synthesizeSyntheticMVarsNoPostponing
       instantiateMVars v
-    return !v.hasExprMVar && !mentions stale v
+    return !v.hasExprMVar && !v.hasSorry && !mentions stale v
   catch _ => return false
 
 
