@@ -33,7 +33,9 @@ files. These weaker models may only read files in this project.
 
 ## Toolchain & conventions
 
-- Lean `v4.32.1` (`lean-toolchain`) + Mathlib `v4.32.1` (`lakefile.toml`).
+- The `tauceti` branch uses Lean `v4.35.0-rc3` and the Mathlib commit pinned in
+  `lakefile.toml` / `lake-manifest.json`, matching TauCeti upstream `main` when updated.
+  Build and test against that pin; update all three pin files together.
 - Source uses the new Lean module system: files open with `module` and use `public import` /
   `public def`.
 - `relaxedAutoImplicit` is off (`lakefile.toml`): declare implicit binders explicitly.
