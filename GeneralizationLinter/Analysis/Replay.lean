@@ -429,8 +429,9 @@ public def hasUnreadParts (dval : Syntax) : Bool :=
   else false
 
 /--
-Returns `true` if `declCmd`'s first `declId` is a suffix of `declName`, or if `declCmd` has no
-`declId`.
+Returns `true` if `declCmd`'s first `declId`, without macro scopes or a leading `_root_`, is a
+suffix of `declName`, or if `declCmd` has no `declId`. Lean removes `_root_` when elaborating a
+declaration name; suffix matching also accommodates namespace and private-name prefixes.
 
 ---
 **Examples**
@@ -438,11 +439,13 @@ Returns `true` if `declCmd`'s first `declId` is a suffix of `declName`, or if `d
 ```
 declIdMatches ‹theorem t : True := trivial› `Foo.t = true
 declIdMatches ‹theorem t : True := trivial› `Foo.s = false
+declIdMatches ‹theorem _root_.Foo.t : True := trivial› `Foo.t = true
+declIdMatches ‹theorem _root_.Foo.t : True := trivial› `Foo.t.aux = false
 declIdMatches ‹theorem t : True := aux where aux : True := trivial› `t.aux = false
 declIdMatches ‹instance : Foo Bar where f := 1; g := 2› `instFooBar = true
 ```
 -/
 public def declIdMatches (declCmd : Syntax) (declName : Name) : Bool :=
   match declCmd.find? (·.isOfKind ``Parser.Command.declId) with
-  | some declId => (declId.getArg 0).getId.eraseMacroScopes.isSuffixOf declName
+  | some declId => (removeRoot (declId.getArg 0).getId.eraseMacroScopes).isSuffixOf declName
   | none => true
