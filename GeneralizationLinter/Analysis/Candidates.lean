@@ -62,6 +62,36 @@ private structure MCAContext where
   includeSubsumers : Bool
 
 
+/-- A binder query retains its source witnesses once across candidate and split searches. -/
+private structure BinderQuery where
+  binder : TargetedBinder
+  sources : Array VertexWitness
+
+/--
+A candidate ancestor and the source/target witnesses that reached it. The replacement is already
+specialized into the binder's original argument pattern; `vertex` preserves the generic graph
+vertex for candidate ordering, strictness checks, and split coherence checks.
+-/
+private structure MatchedAncestor where
+  vertex : Vertex
+  source : VertexWitness
+  target : Vertex
+  replacement : Vertex
+deriving Inhabited
+
+
+/-- Find a reachable ancestor while retaining the selected witness and its substitution. -/
+def MCAContext.matchedAncestor? (ctx : MCAContext) (query : BinderQuery) (v : Vertex) :
+    Option MatchedAncestor := do
+  let targets := v.witnesses ctx.includeSubsumers
+  for source in query.sources do
+    for target in targets do
+      unless ctx.graph.condensation.reaches source.vertex target do continue
+      let some pattern := source.specialize? target.pattern | continue
+      return { vertex := v, source, target, replacement := { v with pattern } }
+  none
+
+
 /--
 If `ctx.includeSubsumers = true`:
 * Returns `true` iff `u` (or a subsumer thereof) reaches `v` (or a subsumer thereof) in `ctx.graph`.
@@ -294,8 +324,9 @@ def sccRepresentative? (scc : Array Vertex) : Option Vertex :=
 
 
 /--
-Returns a minimal common ancestor (MCA) of `reqVerts` in `ctx.graph.condensation` which `b` can
-reach. If none exists, returns `none`. If more than one such MCA exists, uses `minByName?` to
+Returns a minimal common ancestor (MCA) of `reqVerts` reachable from `query.binder`, retaining
+the source witness and substitution that specialize its replacement. If none exists, returns
+`none`. If more than one such MCA exists, uses `minByName?` to
 tie-break incomparable MCAs, and `sccRepresentative?` to tie-break the comparable ones (which will
 inevitably be equipotent).
 
@@ -344,34 +375,26 @@ subsumers in every way except also being universe polymorphic.
 
 **See also:** `minCommonAncestors`.
 -/
-def MCAContext.minCommonAncestor? (ctx : MCAContext) (b : TargetedBinder) (reqVerts : Array Vertex) :
-    Option Vertex :=
-  -- De-duplicate, and include vertices that match requirements too if `includeSubsumers` is `true`,
-  -- converting `reqVerts` into an array of sets, which will be interpreted by `minCommonAncestors`
-  -- as an AND of ORs to satisfy.
+def MCAContext.minCommonAncestor? (ctx : MCAContext) (query : BinderQuery)
+    (reqVerts : Array Vertex) : Option MatchedAncestor := do
   let witnessSets := reqVerts.map
     fun reqVert => HashSet.ofArray (reqVert.witnesses ctx.includeSubsumers)
-  -- Only MCAs that `b` can reach are of interest to us, otherwise they're not weakenings of `b`.
-  let mcas := (ctx.graph.condensation.minCommonAncestors witnessSets ctx.absencePolicy).filter
-    fun scc => scc.any (ctx.reachesWitnessed b.toVertex ·)
-  match mcas with
-  | #[] => none
-  | #[scc] => sccRepresentative? scc
-  -- #TODO (low priority): If `mcas` has size ≥2, it means there's multiple incomparable minimal
-  -- common ancestors, each of which single-handedly satisfies all requirements (see
-  -- `minCommonAncestors`'s docstring for an example). We could try to simply present them as
-  -- multiple viable options (after verifying them, of course). For now, we just pick one ancestor
-  -- from `mcas` according to the deterministic procedure implemented by `minByName?` and go with
-  -- that.
-  -- This shouldn't happen all that often anyway, so any further improvements here should be
-  -- considered relatively low-priority.
-  | sccs => minByName? (sccs.filterMap sccRepresentative?)
+  -- Capture reachable source/target witnesses during selection instead of discarding the
+  -- reachability result and recovering its substitution in a separate pass.
+  let mcas := (ctx.graph.condensation.minCommonAncestors witnessSets ctx.absencePolicy).filterMap
+    fun scc => do
+      let ancestors := scc.filterMap (ctx.matchedAncestor? query)
+      let some v := sccRepresentative? (ancestors.map (·.vertex)) | none
+      ancestors.find? (·.vertex == v)
+  let some v := minByName? (mcas.map (·.vertex)) | none
+  mcas.find? (·.vertex == v)
 
-/-- Is `b` strictly stronger than `v` according to `ctx.graph`? -/
-def MCAContext.strictlyStrongerThan (ctx : MCAContext) (b : TargetedBinder) (v : Vertex) :
-    Bool :=
-  let bVertex := b.toVertex
-  v != bVertex && ctx.reachesWitnessed bVertex v && ¬ ctx.reachesWitnessed v bVertex
+/-- Is the queried binder strictly stronger than the matched graph ancestor? -/
+def MCAContext.strictlyStrongerThan (ctx : MCAContext) (query : BinderQuery)
+    (m : MatchedAncestor) : Bool :=
+  let bVertex := query.binder.toVertex
+  -- The positive reachability check is witnessed by `m.source` and `m.target` already.
+  m.vertex != bVertex && ¬ ctx.reachesWitnessed m.vertex bVertex
 
 
 /--
@@ -385,14 +408,14 @@ array, or `none` if
 
 **Note:** This function only ever gets called when `splitPolicy` is `.allow` or `.prefer`.
 -/
-def MCAContext.mcasPartition? (ctx : MCAContext) (b : TargetedBinder) (reqVerts : Array Vertex) :
-    Option (Array Vertex) := Id.run do
+def MCAContext.mcasPartition? (ctx : MCAContext) (query : BinderQuery)
+    (reqVerts : Array Vertex) : Option (Array MatchedAncestor) := Id.run do
   let blocks := partitionByDesc (HashSet.ofArray reqVerts) ctx.sharesDataDesc
   if blocks.size ≤ 1 then return none -- If `reqVerts` can't be split up, return `none`.
-  let mut mcas : Array Vertex := #[]
+  let mut mcas : Array MatchedAncestor := #[]
   for block in blocks do
-    let some mca := ctx.minCommonAncestor? b block.toArray | return none
-    unless ctx.strictlyStrongerThan b mca do return none
+    let some mca := ctx.minCommonAncestor? query block.toArray | return none
+    unless ctx.strictlyStrongerThan query mca do return none
     -- `mcas` may contain duplicates. Consider the following example: `IsAlmostIntegral.coeff`'s
     -- `[IsDomain R]` binder has three requirements imposed on it: `Nontrivial #0`, `NoZeroDivisors
     -- #0`, and `NoZeroDivisors (Polynomial #0)`. Now, first, we partition these three requirements
@@ -411,7 +434,7 @@ def MCAContext.mcasPartition? (ctx : MCAContext) (b : TargetedBinder) (reqVerts 
     --
     -- Supposing that the above is the order in which the `for block in blocks` loop above processed
     -- these, its third iteration would, at this exact point, have `mcas = #[Nontrivial #0,
-    -- NoZeroDivisors #0]` and `mca = NoZeroDivisors #0`, and so, without this `mcas.contains mca`
+    -- NoZeroDivisors #0]` and `mca = NoZeroDivisors #0`, and so, without this duplicate-vertex
     -- check here, we'd add `mca` to `mcas` once more and produce `#[Nontrivial #0, NoZeroDivisors
     -- #0, NoZeroDivisors #0]`. Now, since all these are `Prop`-valued, the `sharesDataDesc` check
     -- below wouldn't flag this either, and so we'd propose the weakening candidate `[IsDomain R] ↝
@@ -427,13 +450,13 @@ def MCAContext.mcasPartition? (ctx : MCAContext) (b : TargetedBinder) (reqVerts 
     -- that this duplicate check is only one of several code changes that have been implemented
     -- since that sweep, so only removing this check here might not produce this exact same result.
     -- We are mostly just enumerating them here as a curiosity.)
-    unless mcas.contains mca do mcas := mcas.push mca
+    unless mcas.any (·.vertex == mca.vertex) do mcas := mcas.push mca
   -- `partitionByDesc` partitioned the requirements, but that doesn't mean that the MCAs, which are
   -- "further up" than the requirements, couldn't have shared data descendants now. So we need to
   -- check. As always, this check is incomplete, due to our graph not encoding hyperedges.
   for i in [0:mcas.size] do
     for j in [i+1:mcas.size] do
-      if ctx.sharesDataDesc mcas[i]! mcas[j]! then return none
+      if ctx.sharesDataDesc mcas[i]!.vertex mcas[j]!.vertex then return none
   return some mcas
 
 
@@ -461,47 +484,24 @@ A replacement found in the class graph can still fail verification, so every rep
 is the fallback for the single class, and under `.prefer`, the single class is the fallback for the
 split.
 -/
-def MCAContext.replacements (ctx : MCAContext) (b : TargetedBinder) (reqVerts : Array Vertex) :
-    Array (Array Vertex) :=
+def MCAContext.replacements (ctx : MCAContext) (query : BinderQuery)
+    (reqVerts : Array Vertex) : Array (Array MatchedAncestor) :=
   if reqVerts.isEmpty then #[#[]] else
-  let singleClass? : Option Vertex :=
-    (ctx.minCommonAncestor? b reqVerts).filter (ctx.strictlyStrongerThan b)
+  let singleClass? :=
+    (ctx.minCommonAncestor? query reqVerts).filter (ctx.strictlyStrongerThan query)
   let single := singleClass?.toArray.map (#[·])
   match ctx.splitPolicy with
   | .forbid => single
-  | .allow => single ++ (ctx.mcasPartition? b reqVerts).toArray
+  | .allow => single ++ (ctx.mcasPartition? query reqVerts).toArray
   | .prefer =>
-    match ctx.mcasPartition? b reqVerts, singleClass? with
+    match ctx.mcasPartition? query reqVerts, singleClass? with
     | some mcas, some mca =>
       -- If any of the `mcaᵢ` is stronger than or equipotent to `mca`, then there's no point in
       -- splitting `b` up, so we just return `#[mca]` in that case.
-      if mcas.all (fun mcaᵢ => ¬ ctx.reachesWitnessed mcaᵢ mca) then #[mcas, #[mca]]
+      if mcas.all (fun mcaᵢ => ¬ ctx.reachesWitnessed mcaᵢ.vertex mca.vertex) then #[mcas, #[mca]]
       else #[#[mca]]
     | some mcas, none => #[mcas]
     | none, _ => single
-
-
-/--
-Specialize a graph ancestor to the binder's actual arguments. A source witness can abstract
-constants or structured arguments into placeholders: `InnerProductSpace ℝ E` has pattern
-`#[ℝ, #0]`, but reaches `NormedSpace #0 #1` through the witness `InnerProductSpace #0 #1`.
-The substitution `0 ↦ ℝ, 1 ↦ #0` makes the replacement `NormedSpace ℝ #0`.
-Graph edges preserve the source's placeholder indices (`extractEdge?` rejects rearrangements).
--/
-def MCAContext.specializeReplacement? (ctx : MCAContext) (b : TargetedBinder) (v : Vertex) :
-    Option Vertex := do
-  for source in b.toVertex.witnesses ctx.includeSubsumers do
-    let some subst := matchPattern? source.pattern b.pattern | continue
-    for target in v.witnesses ctx.includeSubsumers do
-      unless ctx.graph.condensation.reaches source target do continue
-      if target.pattern.any (fun p => (p.find? fun
-          | .bvar i => !subst.contains i
-          | _ => false).isSome) then continue
-      let pattern := target.pattern.map fun p => p.replace fun
-        | .bvar i => subst[i]?
-        | _ => none
-      return { v with pattern }
-  none
 
 
 /--
@@ -519,23 +519,33 @@ public def mcaCandidates (graph : ClassGraph) (binders : Array TargetedBinder)
   for b in binders do
     let bReqVerts : HashSet Vertex := reqs.foldl (init := {}) fun bReqVerts' req =>
       if req.binder.id == b.id then bReqVerts'.insert req.toVertex else bReqVerts'
-    let options := (ctx.replacements b (ctx.filterReqVerts b bReqVerts)).filterMap
-      fun repls => repls.mapM (ctx.specializeReplacement? b)
+    let reqVerts := ctx.filterReqVerts b bReqVerts
+    let query : BinderQuery := {
+      binder := b
+      sources := if reqVerts.isEmpty then #[] else
+        b.toVertex.matchedWitnesses ctx.includeSubsumers
+    }
+    let options := ctx.replacements query reqVerts
     if options.isEmpty then continue
     -- Subsumption can sometimes lead to key args getting "modified": for example, `α` in the
     -- targeted binder becoming `αᵒᵖ` in the weakening candidate. Sometimes this can be genuinely
     -- desirable, but most of the time it's not, so, for the time being, we just try again with
     -- subsumption off if we are met with such a situation.
     let options :=
-      if options.all (·.all (ctx.reusesKeyArgsOf b)) then
+      if options.all (·.all (fun m => ctx.reusesKeyArgsOf b m.replacement)) then
         options
       else
         let ctxOff := { ctx with includeSubsumers := false }
-        let alt := (ctxOff.replacements b (ctxOff.filterReqVerts b bReqVerts)).filterMap
-          fun repls => repls.mapM (ctxOff.specializeReplacement? b)
-        if !alt.isEmpty && alt.all (·.all (ctxOff.reusesKeyArgsOf b)) then alt else options
-    for mcas in options do
-      let shape := match mcas with
+        let queryOff : BinderQuery := {
+          binder := b
+          sources := b.toVertex.matchedWitnesses false
+        }
+        let alt := ctxOff.replacements queryOff (ctxOff.filterReqVerts b bReqVerts)
+        if !alt.isEmpty && alt.all (·.all (fun m => ctxOff.reusesKeyArgsOf b m.replacement)) then
+          alt
+        else options
+    for ancestors in options do
+      let shape := match ancestors.map (·.replacement) with
         | #[] => WeakeningShape.drop
         | #[mca] => WeakeningShape.weaken mca
         | mcas => WeakeningShape.split mcas

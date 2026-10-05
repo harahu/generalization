@@ -499,6 +499,42 @@ public def Vertex.properSubsumers (v : Vertex) (maxCombined : Nat := 2048) : Arr
     else out.push { v with pattern := args }
 
 /--
+A graph witness together with its substitution into the original query's argument pattern.
+`subst[i]` replaces placeholder `#i` in `vertex.pattern`; specializing that pattern reconstructs
+the query's pattern. The expressions are shared with the query, not copied.
+-/
+public structure VertexWitness where
+  vertex : Vertex
+  subst : Array Expr
+deriving Inhabited
+
+/-- Specialize a reachable vertex's argument pattern using this witness's substitution. -/
+public def VertexWitness.specialize? (w : VertexWitness) (pattern : Array Expr) :
+    Option (Array Expr) :=
+  if pattern.any (·.looseBVarRange > w.subst.size) then none
+  else some (pattern.map (·.instantiate w.subst))
+
+/--
+The same witnesses, order, universe variants, and expansion bound as `Vertex.witnesses`, retaining
+the substitutions already produced by `subsumersGo`. An original-pattern witness has the identity
+substitution. Substitutions are local to this query and do not enlarge the shared class graph.
+-/
+public def Vertex.matchedWitnesses (query : Vertex) (includeSubsumers : Bool := false) :
+    Array VertexWitness := Id.run do
+  let range := query.pattern.foldl (fun n p => max n p.looseBVarRange) 0
+  let identity := (Array.range range).map Expr.bvar
+  let mut witnesses : Array VertexWitness := #[{ vertex := query, subst := identity }]
+  if includeSubsumers && subsumerCountBound query.pattern ≤ 2048 then
+    for (pattern, subst) in subsumersGo #[] query.pattern.toList do
+      unless pattern == query.pattern do
+        witnesses := witnesses.push { vertex := { query with pattern }, subst }
+  return witnesses.flatMap fun w =>
+    match w.vertex.levels with
+    | .polymorphic => #[w]
+    | .concrete _ => #[w, { w with vertex := { w.vertex with levels := .polymorphic } }]
+
+
+/--
 Given a vertex `query`, returns the array of vertices that match `query`. This is used to match
 non-universe-polymorphic vertices with both the corresponding non-universe-polymorphic vertex _and_
 the corresponding universe-polymorphic vertex.
