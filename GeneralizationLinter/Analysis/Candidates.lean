@@ -482,6 +482,29 @@ def MCAContext.replacements (ctx : MCAContext) (b : TargetedBinder) (reqVerts : 
 
 
 /--
+Specialize a graph ancestor to the binder's actual arguments. A source witness can abstract
+constants or structured arguments into placeholders: `InnerProductSpace ℝ E` has pattern
+`#[ℝ, #0]`, but reaches `NormedSpace #0 #1` through the witness `InnerProductSpace #0 #1`.
+The substitution `0 ↦ ℝ, 1 ↦ #0` makes the replacement `NormedSpace ℝ #0`.
+Graph edges preserve the source's placeholder indices (`extractEdge?` rejects rearrangements).
+-/
+def MCAContext.specializeReplacement? (ctx : MCAContext) (b : TargetedBinder) (v : Vertex) :
+    Option Vertex := do
+  for source in b.toVertex.witnesses ctx.includeSubsumers do
+    let some subst := matchPattern? source.pattern b.pattern | continue
+    for target in v.witnesses ctx.includeSubsumers do
+      unless ctx.graph.condensation.reaches source target do continue
+      if target.pattern.any (fun p => (p.find? fun
+          | .bvar i => !subst.contains i
+          | _ => false).isSome) then continue
+      let pattern := target.pattern.map fun p => p.replace fun
+        | .bvar i => subst[i]?
+        | _ => none
+      return { v with pattern }
+  none
+
+
+/--
 Return a (possibly empty) array of candidate weakenings for any of the targeted binders `binders`
 such that the requirements `reqs` are still satisfied. A binder may get several candidates, which
 then appear consecutively and in order of preference (see `MCAContext.replacements`); at most one of
@@ -496,7 +519,8 @@ public def mcaCandidates (graph : ClassGraph) (binders : Array TargetedBinder)
   for b in binders do
     let bReqVerts : HashSet Vertex := reqs.foldl (init := {}) fun bReqVerts' req =>
       if req.binder.id == b.id then bReqVerts'.insert req.toVertex else bReqVerts'
-    let options := ctx.replacements b (ctx.filterReqVerts b bReqVerts)
+    let options := (ctx.replacements b (ctx.filterReqVerts b bReqVerts)).filterMap
+      fun repls => repls.mapM (ctx.specializeReplacement? b)
     if options.isEmpty then continue
     -- Subsumption can sometimes lead to key args getting "modified": for example, `α` in the
     -- targeted binder becoming `αᵒᵖ` in the weakening candidate. Sometimes this can be genuinely
@@ -507,7 +531,8 @@ public def mcaCandidates (graph : ClassGraph) (binders : Array TargetedBinder)
         options
       else
         let ctxOff := { ctx with includeSubsumers := false }
-        let alt := ctxOff.replacements b (ctxOff.filterReqVerts b bReqVerts)
+        let alt := (ctxOff.replacements b (ctxOff.filterReqVerts b bReqVerts)).filterMap
+          fun repls => repls.mapM (ctxOff.specializeReplacement? b)
         if !alt.isEmpty && alt.all (·.all (ctxOff.reusesKeyArgsOf b)) then alt else options
     for mcas in options do
       let shape := match mcas with

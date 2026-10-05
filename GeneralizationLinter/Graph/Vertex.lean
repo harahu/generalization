@@ -220,6 +220,15 @@ partial def matchE? (env : HashMap Nat Expr) (pattern target : Expr) :
 
 
 /--
+Match the placeholder variables in `pattern` against `target`, returning their substitutions.
+For example, matching `#[#0, #1]` against `#[ℝ, #0]` maps `0` to `ℝ` and `1` to `#0`.
+-/
+public def matchPattern? (pattern target : Array Expr) : Option (HashMap Nat Expr) :=
+  if pattern.size != target.size then none else
+    (pattern.zip target).foldlM (fun env (p, t) => matchE? env p t) {}
+
+
+/--
 Returns `true` iff `pattern` subsumes `target`.
 
 ---
@@ -238,8 +247,7 @@ subsumes #[List (.bvar 0)] #[List Nat]  -- true
 ```
 -/
 public def subsumes (pattern target : Array Expr) : Bool :=
-  pattern.size == target.size &&
-    ((pattern.zip target).foldlM (fun env (p, t) => matchE? env p t) ({} : HashMap Nat Expr)).isSome
+  (matchPattern? pattern target).isSome
 
 
 /--
