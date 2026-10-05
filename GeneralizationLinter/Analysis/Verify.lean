@@ -577,12 +577,25 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       let bindersG := match binderNames[candidate.binder.idx]? with
         | some n => !src.binders.isEmpty && !bindersMention src.binders n
         | none => false
+      -- Building a split can reorder its binders to satisfy dependencies. Track and report the
+      -- classes in the verified statement's order, so later fixpoint passes address the right
+      -- replacements and the printed binders can be elaborated in that order.
+      let idx := accepted.foldl (init := (candidate.binder.idx : Int)) fun i (j, repls) =>
+        if j < candidate.binder.idx then i + repls.size - 1 else i
+      let binders ← getTargetedBinders W
+      let repls := (binders.extract idx.toNat (idx.toNat + candidate.replacements.size)).map
+        (·.toVertex)
+      unless repls.size == candidate.replacements.size do return none
+      let shape := match repls with
+        | #[] => WeakeningShape.drop
+        | #[v] => WeakeningShape.weaken v
+        | vs => WeakeningShape.split vs
       return some {
-        candidate,
+        candidate := { candidate with shape },
         grade := .holds { binders := bindersG, concl := conclG, body := bodyG }
       }
     if let some g := g? then
-      accepted := ws
+      accepted := accepted.push (candidate.binder.idx, g.candidate.replacements)
       graded := graded.push g
   return (graded, accepted)
 
