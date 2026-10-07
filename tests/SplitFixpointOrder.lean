@@ -46,8 +46,10 @@ warning: the `[AddCancelCommMonoid N]` hypothesis of `GeneralizationLinter.Test.
 
 Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
 -/
+-- This split restates the class; disable the strictness guard to test its binder order.
 #guard_msgs in
 set_option linter.generalizeTypeclasses true in
+set_option generalizeTypeclasses.strictnessGuard false in
 set_option generalizeTypeclasses.splitPolicy "prefer" in
 theorem needsModule {R N : Type*} [Semiring R] [AddCancelCommMonoid N] [Module R N]
     (x y z : N) (h : x + y = x + z) : y = z ∧ Nonempty (Module R N) :=

@@ -10,6 +10,19 @@ import Mathlib.Analysis.Normed.Ring.Basic
 import Mathlib.RingTheory.SimpleRing.Field
 import Mathlib.Topology.MetricSpace.Polish
 import Mathlib.Topology.Algebra.Nonarchimedean.Basic
+import Mathlib.LinearAlgebra.FiniteDimensional.Basic
+import Mathlib.RingTheory.IntegralClosure.IsIntegralClosure.Basic
+import Mathlib.RingTheory.Algebraic.Integral
+import Mathlib.RingTheory.IntegralDomain
+import Mathlib.Analysis.Normed.Module.Basic
+import Mathlib.Algebra.Order.Ring.Defs
+import Mathlib.Topology.Connected.Basic
+import Mathlib.FieldTheory.Galois.Basic
+import Mathlib.CategoryTheory.Groupoid
+import Mathlib.Geometry.Manifold.Algebra.SMul
+import Mathlib.Topology.Algebra.Ring.Basic
+import Mathlib.Topology.Algebra.MulAction
+import Mathlib.Algebra.Field.Subfield.Defs
 import GeneralizationLinter
 
 /-!
@@ -78,6 +91,128 @@ theorem nonarchimedeanRing_of_nonarchimedeanAddGroup :
   intro R _ _ _ _
   exact { is_nonarchimedean := NonarchimedeanAddGroup.is_nonarchimedean }
 
+/-! ### Equivalent hypotheses from Tau Ceti rejections -/
+
+noncomputable section
+
+abbrev field_of_isAlgebraic (k E : Type*) [Field k] [CommRing E] [Nontrivial E]
+    [NoZeroDivisors E] [Algebra k E] [Algebra.IsAlgebraic k E] : Field E := by
+  letI : IsDomain E := NoZeroDivisors.to_isDomain E
+  letI : Algebra.IsIntegral k E := Algebra.IsAlgebraic.isIntegral
+  exact (isField_of_isIntegral_of_isField' (Field.toIsField k)).toField
+
+abbrev field_of_finite (E : Type*) [CommRing E] [Nontrivial E] [NoZeroDivisors E]
+    [Finite E] : Field E := by
+  letI : IsDomain E := NoZeroDivisors.to_isDomain E
+  letI := Fintype.ofFinite E
+  letI := Classical.decEq E
+  exact Fintype.fieldOfDomain E
+
+abbrev commRing_of_algebra (R A : Type*) [CommRing R] [CommSemiring A] [Algebra R A] : CommRing A :=
+  { Algebra.semiringToRing R with mul_comm := mul_comm }
+
+abbrev addCancelCommMonoid_of_isLeftCancelAdd (M : Type*) [AddCommMonoid M] [IsLeftCancelAdd M] :
+    AddCancelCommMonoid M :=
+  { (inferInstance : AddCommMonoid M) with
+    add_left_cancel := fun _ _ _ h => add_left_cancel h }
+
+abbrev commGroup_of_isMulCommutative (G : Type*) [Group G] [IsMulCommutative G] : CommGroup G :=
+  { (inferInstance : Group G) with mul_comm := fun a b => IsMulCommutative.is_comm.comm a b }
+
+abbrev commRing_of_isCentralScalar (R : Type*) [Ring R] [IsCentralScalar R R] : CommRing R :=
+  { (inferInstance : Ring R) with mul_comm := fun a b => op_smul_eq_smul b a }
+
+abbrev normedSpace_of_normSMulClass (K N : Type*) [NormedField K] [SeminormedAddCommGroup N]
+    [Module K N] [NormSMulClass K N] : NormedSpace K N where
+  norm_smul_le a b := (norm_smul a b).le
+
+abbrev algebra_of_isScalarTower (A R : Type*) [CommSemiring A] [CommSemiring R]
+    [Module A R] [IsScalarTower A R R] : Algebra A R :=
+  Algebra.ofModule smul_mul_assoc fun a r s => by
+    rw [mul_comm, smul_mul_assoc, mul_comm]
+
+theorem connectedSpace_of_preconnectedSpace (X : Type*) [TopologicalSpace X]
+    [PreconnectedSpace X] [Nonempty X] :
+    ConnectedSpace X := { toNonempty := inferInstance }
+
+theorem isGalois_of_normal_of_isSeparable (K L : Type*) [Field K] [Field L] [Algebra K L]
+    [Normal K L] [Algebra.IsSeparable K L] : IsGalois K L :=
+  { to_isSeparable := inferInstance, to_normal := inferInstance }
+
+abbrev unique_of_subsingleton (X : Type*) [Inhabited X] [Subsingleton X] : Unique X :=
+  { (inferInstance : Inhabited X) with uniq := fun _ => Subsingleton.elim _ _ }
+
+theorem ringHomClass_of_addMonoidHomClass (F A B : Type*) [NonAssocSemiring A] [NonAssocSemiring B]
+    [FunLike F A B] [MonoidHomClass F A B] [AddMonoidHomClass F A B] : RingHomClass F A B :=
+  { (inferInstance : MonoidHomClass F A B), (inferInstance : AddMonoidHomClass F A B) with }
+
+theorem isOrderedRing_of_posMulMono (R : Type*) [CommRing R] [LinearOrder R] [IsOrderedAddMonoid R]
+    [PosMulMono R] : IsOrderedRing R := by
+  have : ZeroLEOneClass R := ⟨by
+    by_contra h
+    have h1 : 1 < (0 : R) := lt_of_not_ge h
+    have hm : 0 ≤ (-1 : R) := le_of_lt (neg_pos.mpr h1)
+    have hh : 0 ≤ (-1 : R) * (-1) := mul_nonneg hm hm
+    have hh1 : (0 : R) ≤ 1 := by simpa only [neg_mul_neg, one_mul] using hh
+    exact (not_le_of_gt h1) hh1⟩
+  exact IsOrderedRing.of_mul_nonneg fun _ _ ha hb => mul_nonneg ha hb
+
+theorem isStrictOrderedRing_of_posMulMono (R : Type*) [Field R] [LinearOrder R]
+    [IsOrderedAddMonoid R] [PosMulMono R] : IsStrictOrderedRing R := by
+  let := isOrderedRing_of_posMulMono R
+  infer_instance
+
+theorem isStrictOrderedRing_of_mulPosMono (R : Type*) [Field R] [LinearOrder R]
+    [IsOrderedAddMonoid R] [MulPosMono R] : IsStrictOrderedRing R := by
+  have : PosMulMono R := posMulMono_iff_mulPosMono.mpr inferInstance
+  exact isStrictOrderedRing_of_posMulMono R
+
+abbrev addLeftCancelMonoid_of_isLeftCancelAdd (N : Type*) [AddMonoid N] [IsLeftCancelAdd N] :
+    AddLeftCancelMonoid N :=
+  { (inferInstance : AddMonoid N) with add_left_cancel := fun _ _ _ h => add_left_cancel h }
+
+abbrev addRightCancelMonoid_of_isRightCancelAdd (N : Type*) [AddMonoid N] [IsRightCancelAdd N] :
+    AddRightCancelMonoid N :=
+  { (inferInstance : AddMonoid N) with add_right_cancel := fun _ _ _ h => add_right_cancel h }
+
+abbrev rightCancelMonoid_of_isRightCancelMul (N : Type*) [Monoid N] [IsRightCancelMul N] :
+    RightCancelMonoid N :=
+  { (inferInstance : Monoid N) with mul_right_cancel := fun _ _ _ h => mul_right_cancel h }
+
+theorem ringHomClass_of_addHomClass (F A B : Type*) [NonAssocRing A] [NonAssocRing B]
+    [FunLike F A B] [MonoidHomClass F A B] [AddHomClass F A B] : RingHomClass F A B :=
+  { (inferInstance : MonoidHomClass F A B), (inferInstance : AddHomClass F A B) with
+    map_zero := fun f => add_left_cancel (show f 0 + f 0 = f 0 + 0 by
+      simpa only [zero_add, add_zero] using (map_add f (0 : A) 0).symm) }
+
+theorem subfieldClass_of_parts (S K : Type*) [DivisionRing K] [SetLike S K]
+    [AddSubmonoidWithOneClass S K] [SubmonoidClass S K] [InvMemClass S K]
+    [AddSubgroupClass S K] : SubfieldClass S K :=
+  { (inferInstance : AddSubmonoidWithOneClass S K), (inferInstance : SubmonoidClass S K),
+    (inferInstance : InvMemClass S K), (inferInstance : AddSubgroupClass S K) with }
+
+theorem isTopologicalSemiring_of_continuousSMul (R : Type*) [Semiring R] [TopologicalSpace R]
+    [ContinuousAdd R] [ContinuousSMul R R] : IsTopologicalSemiring R where
+  continuous_mul := continuous_smul
+
+theorem isTopologicalRing_of_continuousSMul (R : Type*) [Ring R] [TopologicalSpace R]
+    [ContinuousAdd R] [ContinuousSMul R R] : IsTopologicalRing R := by
+  have : ContinuousMul R := ⟨continuous_smul⟩
+  exact IsTopologicalSemiring.toIsTopologicalRing (show IsTopologicalSemiring R from {})
+
+theorem contMDiffMul_of_contMDiffSMul (𝕜 H E : Type*) [NontriviallyNormedField 𝕜]
+    [TopologicalSpace H] [NormedAddCommGroup E] [NormedSpace 𝕜 E]
+    (I : ModelWithCorners 𝕜 E H) (n : WithTop ℕ∞)
+    (G : Type*) [Mul G] [TopologicalSpace G] [ChartedSpace H G]
+    [IsManifold I n G] [ContMDiffSMul I I n G G] : ContMDiffMul I n G where
+  contMDiff_mul := contMDiff_smul
+
+theorem isTopologicalRing_of_continuousMul (R : Type*) [NonAssocRing R] [TopologicalSpace R]
+    [ContinuousAdd R] [ContinuousMul R] : IsTopologicalRing R :=
+  IsTopologicalSemiring.toIsTopologicalRing (show IsTopologicalSemiring R from {})
+
+end
+
 /-- Checks every bridge rule against the theorem it names. -/
 elab "#check_bridge_rules" : command => liftTermElabM do
   for r in bridgeRules do
@@ -90,7 +225,7 @@ elab "#check_bridge_rules" : command => liftTermElabM do
       throwError "`{r.proof}` proves `{proved}`, not the rule `{statement}`"
   logInfo m!"all {bridgeRules.size} bridge rules are proved"
 
-/-- info: all 8 bridge rules are proved -/
+/-- info: all 32 bridge rules are proved -/
 #guard_msgs in
 #check_bridge_rules
 

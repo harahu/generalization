@@ -499,7 +499,13 @@ def vacuityBridges : Array Name := #[
   `MetricSpace.ofT0PseudoMetricSpace,
   `EMetricSpace.ofT0PseudoEMetricSpace,
   -- a finite Galois group makes the extension Galois
-  `IsGaloisGroup.isGalois
+  `IsGaloisGroup.isGalois,
+  -- a finite-dimensional domain algebra over a field is a division ring
+  `divisionRingOfFiniteDimensional,
+  -- an algebra over a commutative ring has additive inverses
+  `Algebra.semiringToRing,
+  -- a category in which every arrow is invertible is a groupoid
+  `CategoryTheory.Groupoid.ofIsGroupoid
 ]
 
 
@@ -614,7 +620,76 @@ public def bridgeRules : Array BridgeRule := #[
   -- over a ring, a nonarchimedean additive group with continuous multiplication
   { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [NonarchimedeanAddGroup R] \
       [ContinuousMul R], NonarchimedeanRing R",
-    proof := `GeneralizationLinter.Test.BridgeRules.nonarchimedeanRing_of_nonarchimedeanAddGroup }
+    proof := `GeneralizationLinter.Test.BridgeRules.nonarchimedeanRing_of_nonarchimedeanAddGroup },
+  -- Reconstruct classes from equivalent fragments of their structure, or from
+  -- algebraicity, finiteness, scalar compatibility, and order compatibility.
+  { statement := "∀ (k E : Type _) [Field k] [CommRing E] [Nontrivial E] [NoZeroDivisors E] \
+      [Algebra k E] [Algebra.IsAlgebraic k E], Field E",
+    proof := `GeneralizationLinter.Test.BridgeRules.field_of_isAlgebraic },
+  { statement := "∀ (E : Type _) [CommRing E] [Nontrivial E] [NoZeroDivisors E] [Finite E], \
+      Field E",
+    proof := `GeneralizationLinter.Test.BridgeRules.field_of_finite },
+  { statement := "∀ (R A : Type _) [CommRing R] [CommSemiring A] [Algebra R A], CommRing A",
+    proof := `GeneralizationLinter.Test.BridgeRules.commRing_of_algebra },
+  { statement := "∀ (M : Type _) [AddCommMonoid M] [IsLeftCancelAdd M], AddCancelCommMonoid M",
+    proof := `GeneralizationLinter.Test.BridgeRules.addCancelCommMonoid_of_isLeftCancelAdd },
+  { statement := "∀ (G : Type _) [Group G] [IsMulCommutative G], CommGroup G",
+    proof := `GeneralizationLinter.Test.BridgeRules.commGroup_of_isMulCommutative },
+  { statement := "∀ (R : Type _) [Ring R] [IsCentralScalar R R], CommRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.commRing_of_isCentralScalar },
+  { statement := "∀ (K N : Type _) [NormedField K] [SeminormedAddCommGroup N] [Module K N] \
+      [NormSMulClass K N], NormedSpace K N",
+    proof := `GeneralizationLinter.Test.BridgeRules.normedSpace_of_normSMulClass },
+  { statement := "∀ (A R : Type _) [CommSemiring A] [CommSemiring R] [Module A R] \
+      [IsScalarTower A R R], Algebra A R",
+    proof := `GeneralizationLinter.Test.BridgeRules.algebra_of_isScalarTower },
+  { statement := "∀ (X : Type _) [TopologicalSpace X] [PreconnectedSpace X] [Nonempty X], \
+      ConnectedSpace X",
+    proof := `GeneralizationLinter.Test.BridgeRules.connectedSpace_of_preconnectedSpace },
+  { statement := "∀ (K L : Type _) [Field K] [Field L] [Algebra K L] [Normal K L] \
+      [Algebra.IsSeparable K L], IsGalois K L",
+    proof := `GeneralizationLinter.Test.BridgeRules.isGalois_of_normal_of_isSeparable },
+  { statement := "∀ (X : Type _) [Inhabited X] [Subsingleton X], Unique X",
+    proof := `GeneralizationLinter.Test.BridgeRules.unique_of_subsingleton },
+  { statement := "∀ (F A B : Type _) [NonAssocSemiring A] [NonAssocSemiring B] [FunLike F A B] \
+      [MonoidHomClass F A B] [AddMonoidHomClass F A B], RingHomClass F A B",
+    proof := `GeneralizationLinter.Test.BridgeRules.ringHomClass_of_addMonoidHomClass },
+  { statement := "∀ (R : Type _) [CommRing R] [LinearOrder R] [IsOrderedAddMonoid R] \
+      [PosMulMono R], IsOrderedRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isOrderedRing_of_posMulMono },
+  { statement := "∀ (R : Type _) [Field R] [LinearOrder R] [IsOrderedAddMonoid R] [PosMulMono R], \
+      IsStrictOrderedRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isStrictOrderedRing_of_posMulMono },
+  { statement := "∀ (R : Type _) [Field R] [LinearOrder R] [IsOrderedAddMonoid R] [MulPosMono R], \
+      IsStrictOrderedRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isStrictOrderedRing_of_mulPosMono },
+  { statement := "∀ (N : Type _) [AddMonoid N] [IsLeftCancelAdd N], AddLeftCancelMonoid N",
+    proof := `GeneralizationLinter.Test.BridgeRules.addLeftCancelMonoid_of_isLeftCancelAdd },
+  { statement := "∀ (N : Type _) [AddMonoid N] [IsRightCancelAdd N], AddRightCancelMonoid N",
+    proof := `GeneralizationLinter.Test.BridgeRules.addRightCancelMonoid_of_isRightCancelAdd },
+  { statement := "∀ (N : Type _) [Monoid N] [IsRightCancelMul N], RightCancelMonoid N",
+    proof := `GeneralizationLinter.Test.BridgeRules.rightCancelMonoid_of_isRightCancelMul },
+  { statement := "∀ (F A B : Type _) [NonAssocRing A] [NonAssocRing B] [FunLike F A B] \
+      [MonoidHomClass F A B] [AddHomClass F A B], RingHomClass F A B",
+    proof := `GeneralizationLinter.Test.BridgeRules.ringHomClass_of_addHomClass },
+  { statement := "∀ (S K : Type _) [DivisionRing K] [SetLike S K] [AddSubmonoidWithOneClass S K] \
+      [SubmonoidClass S K] [InvMemClass S K] [AddSubgroupClass S K], \
+      SubfieldClass S K",
+    proof := `GeneralizationLinter.Test.BridgeRules.subfieldClass_of_parts },
+  { statement := "∀ (R : Type _) [Semiring R] [TopologicalSpace R] [ContinuousAdd R] \
+      [ContinuousSMul R R], IsTopologicalSemiring R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalSemiring_of_continuousSMul },
+  { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [ContinuousAdd R] \
+      [ContinuousSMul R R], IsTopologicalRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalRing_of_continuousSMul },
+  { statement := "∀ (𝕜 H E : Type _) [NontriviallyNormedField 𝕜] [TopologicalSpace H] \
+      [NormedAddCommGroup E] [NormedSpace 𝕜 E] (I : ModelWithCorners 𝕜 E H) \
+      (n : WithTop ℕ∞) (G : Type _) [Mul G] [TopologicalSpace G] [ChartedSpace H G] \
+      [IsManifold I n G] [ContMDiffSMul I I n G G], ContMDiffMul I n G",
+    proof := `GeneralizationLinter.Test.BridgeRules.contMDiffMul_of_contMDiffSMul },
+  { statement := "∀ (R : Type _) [NonAssocRing R] [TopologicalSpace R] [ContinuousAdd R] \
+      [ContinuousMul R], IsTopologicalRing R",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalRing_of_continuousMul }
 ]
 
 
