@@ -13,7 +13,7 @@ style guide.
 The `tauceti` branch uses the Lean and Mathlib pins from
 [TauCeti upstream `main`](https://github.com/TauCetiProject/TauCeti/tree/main).
 Its current baseline is Lean `v4.35.0-rc3` and Mathlib
-`6b7abb3c7686292736be2955bd3eb9ebf63b456a`. Build and test this fork with its pinned toolchain.
+`3b531c35df33d6bbe64b4e87dec056211d3a5676`. Build and test this fork with its pinned toolchain.
 Update `lean-toolchain`, the Mathlib revision in `lakefile.toml`, and `lake-manifest.json` together
 when adopting newer TauCeti pins.
 
