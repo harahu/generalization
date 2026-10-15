@@ -15,7 +15,8 @@ namespace GeneralizationLinter
 
 /--
 Classification of a "declaration wrapper" (the `…` of a `… in ‹decl›` command), telling the linter
-whether to replay it, collect its binders, ignore it, or refuse to lint the wrapped declaration.
+whether to replay it, collect its binders, replay it as a command, ignore it, or refuse to lint the
+wrapped declaration.
 -/
 public inductive WrapperClassification where
   /--
@@ -29,6 +30,12 @@ public inductive WrapperClassification where
   original (possibly stronger) hypotheses around the weakened term.
   -/
   | binders
+  /--
+  `attribute … in` wrappers change the environment the declaration was elaborated in, for example by
+  adding a local instance or erasing an instance. They have no term counterpart, so the linter
+  replays them as commands before analyzing the declaration.
+  -/
+  | attributes
   /--
   "Declaration wrappers" that we can ignore, because they don't affect our linter's verdict (in the
   case of `omit`, it's merely that they are relatively unlikely to affect our linter's verdict "in
@@ -51,7 +58,7 @@ public inductive WrapperClassification where
   /--
   "Declaration wrappers" that we cannot replay, and which may affect our linter's verdict. When a
   declaration is wrapped with one or more of these kinds of wrappers, we skip it. Any wrappers that
-  are not `.replayable`, `.binders`, or `.ignorable` are treated as `.refused`.
+  are not `.replayable`, `.binders`, `.attributes`, or `.ignorable` are treated as `.refused`.
   -/
   | refused
 deriving Inhabited, BEq
@@ -75,15 +82,17 @@ Classify "wrappers".
 classifyWrapper ‹open Nat› = .replayable
 classifyWrapper ‹set_option pp.all true› = .replayable
 classifyWrapper ‹variable [Monoid M]› = .binders
+classifyWrapper ‹attribute [local simp] Nat.add_comm› = .attributes
 classifyWrapper ‹include x› = .ignorable
 classifyWrapper ‹omit [Inhabited α]› = .ignorable
-classifyWrapper ‹attribute [simp] Nat.add› = .refused
+classifyWrapper ‹unseal Nat.add› = .refused
 ```
 -/
 public def classifyWrapper (w: Syntax) : WrapperClassification :=
   match w.getKind with
   | ``Parser.Command.open | ``Parser.Command.set_option => .replayable
   | ``Parser.Command.variable => .binders
+  | ``Parser.Command.attribute => .attributes
   | ``Parser.Command.include
   -- Note: when `acceptOmits` is `false` (default), then `omit`s are not actually treated as
   -- ignorable.
@@ -108,8 +117,8 @@ public partial def hasOmitWrapper (stx : Syntax) : Bool :=
   else (stx.getArg 0).getKind == ``Parser.Command.omit || hasOmitWrapper (stx.getArg 2)
 
 /--
-Peel any `open … in`, `set_option … in`, `variable … in`, `include … in …`, and `omit … in …`
-"wrappers" off of the main declaration. For example, if `stx` was
+Peel any `open … in`, `set_option … in`, `variable … in`, `attribute … in`, `include … in …`, and
+`omit … in …` "wrappers" off of the main declaration. For example, if `stx` was
 
 ```
 open Nat in
@@ -123,11 +132,12 @@ then calling `peelWrappers? stx` would return `some (#[‹open Nat›, ‹set_op
 those returned; this is because we either ignore `omit`s entirely or, if `acceptOmits` is `false`
 (which it is by default), declarations with `omit`s are skipped by the linter altogether.)
 
-If the declaration includes any other wrappers (e.g. `attribute … in …`), return `none`. This is
+If the declaration includes any other wrappers (e.g. `unseal … in …`), return `none`. This is
 because `peelWrappers?`'s output is passed on to `rewrapTerm` to get rewrapped into a _term_ instead
 of a command or declaration (which would be much harder to deal with further down the line).
 `open` and `set_option` have term counterparts; `variable` wrappers are retained for
-`wrapperBinders`, but are not replayed around terms.
+`wrapperBinders`, and `attribute` wrappers for being replayed as commands, but neither is replayed
+around terms.
 
 ---
 **Example**
@@ -200,7 +210,7 @@ public partial def peelWrappers? (stx : Syntax) (wrappers : Array Syntax := #[])
   else if stx.getKind == ``Parser.Command.in then
     let w := stx.getArg 0
     match classifyWrapper w with
-    | .replayable | .binders => peelWrappers? (stx.getArg 2) (wrappers.push w)
+    | .replayable | .binders | .attributes => peelWrappers? (stx.getArg 2) (wrappers.push w)
     | .ignorable => peelWrappers? (stx.getArg 2) wrappers
     | .refused => none
   else none
@@ -314,7 +324,8 @@ public def bodyTermOfDeclVal? (dval : Syntax) : TermElabM (Option Syntax) := do
 Syntactically "rewrap" a term with the replayable previously peeled wrappers.
 `variable` wrappers contribute to `wrapperBinders` instead: verification reconstructs local
 variables from the weakened declaration's telescope, so replaying the original binders here would
-reintroduce the hypotheses being weakened.
+reintroduce the hypotheses being weakened. `attribute` wrappers are replayed as commands before
+the analysis instead.
 
 ---
 **Example**
@@ -351,14 +362,14 @@ into the `Syntax` tree
 public def rewrapTerm (wrappers : Array Syntax) (stx : Syntax) : Syntax :=
   wrappers.foldr (init := stx) fun w body =>
     match w.getKind with
-      | ``Parser.Command.variable => body
+      | ``Parser.Command.variable | ``Parser.Command.attribute => body
       | ``Parser.Command.open =>
         mkNode ``Parser.Term.open (w.getArgs ++ #[mkAtom "in", body])
       | ``Parser.Command.set_option =>
         mkNode ``Parser.Term.set_option (w.getArgs ++ #[mkAtom "in", body])
       -- Should be unreachable.
       | k => panic! s!"`rewrapTerm`: unexpected wrapper kind `{k}` \
-          (`peelWrappers?` should only collect `open`/`set_option`/`variable`)"
+          (`peelWrappers?` should only collect `open`/`set_option`/`variable`/`attribute`)"
 
 
 /--
