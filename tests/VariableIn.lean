@@ -95,7 +95,7 @@ theorem dependent : Parent.op a = Parent.op a := h
 -- The existing refusal policy for other wrappers remains in force.
 #guard_msgs in
 variable {α : Type} [Child α] (a : α) in
-attribute [local simp] unwrapped in
+local notation "𝒪" => Parent.op in
 theorem refused : Parent.op a = Parent.op a := rfl
 
 -- Omits remain suppressed by default, even when nested beneath a variable wrapper.

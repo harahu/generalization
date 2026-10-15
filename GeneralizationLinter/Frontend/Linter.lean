@@ -253,6 +253,39 @@ def wrapperEffectiveOptions? (wrappers : Array Syntax) :
   return effectiveOpts
 
 
+/--
+Replays `wrappers` as commands in source order if any of them is an `attribute` wrapper, so that the
+analysis runs in the environment the declaration was elaborated in, with its local attributes, such
+as local instances, simp lemmas, and erased instances. The other wrappers are replayed along with
+them, since they may affect how an attribute is elaborated, such as an `open` that resolves its
+name. Returns `false` if replaying fails, in which case the declaration is not linted.
+
+Only the environment keeps the effect of the replay, and `runLinters` restores it after each linter.
+
+---
+**Examples**
+
+```
+replayAttributeWrappers #[‹open Nat›] = true  -- (nothing replayed)
+replayAttributeWrappers #[‹open Nat›, ‹attribute [local simp] add_comm›] = true
+  -- (`Nat.add_comm` is a simp lemma until the linter finishes)
+replayAttributeWrappers #[‹attribute [local simp] no_such_lemma›] = false
+```
+-/
+def replayAttributeWrappers (wrappers : Array Syntax) : CommandElabM Bool := do
+  unless wrappers.any (·.isOfKind ``Parser.Command.attribute) do return true
+  let saved ← get
+  -- `elabCommand` logs the errors of a failed command instead of throwing them.
+  modify fun s => { s with messages := {} }
+  let replayed ← try
+      wrappers.forM elabCommand
+      pure !(← get).messages.hasErrors
+    catch _ => pure false
+  modify fun s =>
+    { s with scopes := saved.scopes, messages := saved.messages, infoState := saved.infoState }
+  return replayed
+
+
 private inductive Stats.Outcome
   | noGraph
   | untargeted
@@ -345,6 +378,7 @@ public def generalizeTypeclasses : Linter where
       (declVals.size == 1 && hasUnreadParts declVals[0]!)
     let hb := Core.getMaxHeartbeats effectiveOpts
     let cfg := LinterConfig.ofOptions effectiveOpts
+    unless ← replayAttributeWrappers wrappers do return
     for infoTree in ← getInfoTrees do
       -- Theorems to lint.
       let thms := infoTree.getTheorems (← getEnv)
