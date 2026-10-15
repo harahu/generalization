@@ -127,13 +127,14 @@ omit [Monoid M] in
 @[instance] lemma something : … := …
 ```
 
-then calling `peelWrappers? stx` would return `some (#[‹open Nat›, ‹set_option pp.all true›],
+then calling `peelWrappers stx` would return `.ok (#[‹open Nat›, ‹set_option pp.all true›],
 ‹@[instance] lemma something : … := …›)`. (Note that the `omit [Monoid M] in` wrapper is not among
 those returned; this is because we either ignore `omit`s entirely or, if `acceptOmits` is `false`
 (which it is by default), declarations with `omit`s are skipped by the linter altogether.)
 
-If the declaration includes any other wrappers (e.g. `unseal … in …`), return `none`. This is
-because `peelWrappers?`'s output is passed on to `rewrapTerm` to get rewrapped into a _term_ instead
+If the declaration includes any other wrappers (e.g. `unseal … in …`), or `stx` is not a
+declaration at all (e.g. a `mutual` block), return `.error` with the reason the linter skips it.
+This is because `peelWrappers`'s output is passed on to `rewrapTerm` to get rewrapped into a _term_ instead
 of a command or declaration (which would be much harder to deal with further down the line).
 `open` and `set_option` have term counterparts; `variable` wrappers are retained for
 `wrapperBinders`, and `attribute` wrappers for being replayed as commands, but neither is replayed
@@ -200,20 +201,20 @@ The corresponding `Syntax` tree is:
 (See Lean/Parser/Command.lean, Lean/Parser/Term.lean, and Lean/Parser/Attr.lean for more information
 on the parentheticals in the tree above.)
 
-So `peelWrappers?` would return `some (wrappers, decl)`, where `wrappers` and `decl` are as
+So `peelWrappers` would return `.ok (wrappers, decl)`, where `wrappers` and `decl` are as
 indicated above.
 -/
-public partial def peelWrappers? (stx : Syntax) (wrappers : Array Syntax := #[]) :
-    Option ((Array Syntax) × Syntax) :=
+public partial def peelWrappers (stx : Syntax) (wrappers : Array Syntax := #[]) :
+    Except String ((Array Syntax) × Syntax) :=
   if stx.getKind == ``Parser.Command.declaration || stx.getKind == lemmaKind then
-    some (wrappers, stx)
+    .ok (wrappers, stx)
   else if stx.getKind == ``Parser.Command.in then
     let w := stx.getArg 0
     match classifyWrapper w with
-    | .replayable | .binders | .attributes => peelWrappers? (stx.getArg 2) (wrappers.push w)
-    | .ignorable => peelWrappers? (stx.getArg 2) wrappers
-    | .refused => none
-  else none
+    | .replayable | .binders | .attributes => peelWrappers (stx.getArg 2) (wrappers.push w)
+    | .ignorable => peelWrappers (stx.getArg 2) wrappers
+    | .refused => .error s!"unsupported wrapper {w.getKind}"
+  else .error s!"unsupported command {stx.getKind}"
 
 
 /--
@@ -297,7 +298,7 @@ small. Nonetheless, it's potential future work.
 ---
 **Example**
 
-For the `Parser.Command.declValSimple` node of the example from `peelWrappers?`,
+For the `Parser.Command.declValSimple` node of the example from `peelWrappers`,
 `bodyTermOfDeclVal?` returns (`some` of) the following syntax tree:
 
 ```markdown
@@ -330,7 +331,7 @@ the analysis instead.
 ---
 **Example**
 
-Continuing the example from `peelWrappers?`, we have that `rewrapTerm` would combine the single
+Continuing the example from `peelWrappers`, we have that `rewrapTerm` would combine the single
 wrapper in `wrappers`
 
 ```markdown
@@ -369,7 +370,7 @@ public def rewrapTerm (wrappers : Array Syntax) (stx : Syntax) : Syntax :=
         mkNode ``Parser.Term.set_option (w.getArgs ++ #[mkAtom "in", body])
       -- Should be unreachable.
       | k => panic! s!"`rewrapTerm`: unexpected wrapper kind `{k}` \
-          (`peelWrappers?` should only collect `open`/`set_option`/`variable`/`attribute`)"
+          (`peelWrappers` should only collect `open`/`set_option`/`variable`/`attribute`)"
 
 
 /--

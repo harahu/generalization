@@ -140,7 +140,7 @@ run_cmd liftTermElabM do
         ("variable {α : Type} [Child α] (a : α) in " ++
           "theorem unused : Parent.op a = Parent.op a := " ++ body)
       | throwError "could not parse test declaration"
-    let some (wrappers, decl) := peelWrappers? cmd
+    let .ok (wrappers, decl) := peelWrappers cmd
       | throwError "variable wrapper was refused"
     let some rawBody ← bodyTermOfDeclVal? (declValNodes decl)[0]!
       | throwError "missing test declaration body"
