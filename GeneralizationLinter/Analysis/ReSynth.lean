@@ -100,7 +100,13 @@ public def replaceBinderType? (oldType : Expr) (replacement : Vertex) : MetaM (O
 
 /-- Does `e` have any fvar that is contained in `stale`? -/
 def mentions (stale : HashSet FVarId) (e : Expr) : Bool :=
-  e.hasAnyFVar stale.contains
+  -- Elaborated terms share subterms heavily, and `Expr.hasAnyFVar` revisits each shared subterm once
+  -- per occurrence, which made a single weakened statement take tens of seconds to rebuild.
+  -- `findExt?` visits each subterm once and skips the ones without fvars.
+  e.hasFVar && (e.findExt? fun s =>
+    if !s.hasFVar then .done
+    else if let .fvar id := s then (if stale.contains id then .found else .done)
+    else .visit).isSome
 
 mutual
 /-- Rebuilds `e` into an expression that is valid in the weakened context. -/
