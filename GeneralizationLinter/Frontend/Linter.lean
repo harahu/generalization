@@ -340,16 +340,17 @@ private def statsOfGraded (gw : GradedWeakening) : Json :=
 
 /--
 Run the typeclass linter on the declaration named `declName` whose `ConstantInfo` is `const` and
-whose syntax is described by `src`.
+whose syntax is described by `src`. Sets `truncated` if a heartbeat budget runs out (see
+`gradedWeakenings`).
 -/
 def lintTypeclassesFor (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
-    (src : DeclSource) (declName : Name)
+    (src : DeclSource) (declName : Name) (truncated : IO.Ref Bool)
     (omitCaveat : Bool := false) : TermElabM (Array GradedWeakening) := do
   let caveat := if omitCaveat then
     " This declaration's scope has one or more variables omitted from it, which means that the \
       suggested weakening may require the declaration or its value to be modified, or the omit \
       command to be removed, to be valid." else ""
-  let gws ← gradedWeakenings cfg graph const src
+  let gws ← gradedWeakenings cfg graph const src truncated
   for gw in gws do
     let c := gw.candidate
     let (disp, target) ← describeCandidate const c
@@ -444,12 +445,12 @@ public def generalizeTypeclasses : Linter where
             logStats effectiveOpts thm.name (.skipped "auxiliary declaration"); continue
           let const ← getConstInfo thm.name
           let statsOn := generalizeTypeclasses.stats.get effectiveOpts
-          budgetExhaustedRef.set false
+          let truncated ← IO.mkRef false
           let h0 ← IO.getNumHeartbeats
           let (outcome, emits) : Stats.Outcome × Array Json ← tryCatchRuntimeEx (
               do
                 if ← hasTargetedBinder const.type then
-                  let gws ← lintTypeclassesFor cfg graph const src thm.name
+                  let gws ← lintTypeclassesFor cfg graph const src thm.name truncated
                     (omitCaveat := omitTouched)
                   return (.analyzed, if statsOn then gws.map statsOfGraded else #[])
                 else return (.untargeted, #[])
@@ -458,7 +459,7 @@ public def generalizeTypeclasses : Linter where
             )
           logStats effectiveOpts thm.name outcome [
             ("heartbeats", toJson ((← IO.getNumHeartbeats) - h0)),
-            ("truncated", toJson (← budgetExhaustedRef.get)),
+            ("truncated", toJson (← truncated.get)),
             ("emits", Json.arr emits)]
 
 
