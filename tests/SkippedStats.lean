@@ -52,18 +52,6 @@ info: GL_STATS {"decl":"SkippedStatsTest.disabled","outcome":"skipped","reason":
 set_option linter.generalizeTypeclasses false in
 theorem disabled {α : Type} [Child α] : (Parent.pt : α) = Parent.pt := rfl
 
-section
-variable {α : Type} [Child α] [Inhabited α]
-
-/--
-info: GL_STATS {"decl":"SkippedStatsTest.omitted","outcome":"skipped","reason":"omitted variables"}
--/
-#guard_msgs in
-omit [Inhabited α] in
-theorem omitted : (Parent.pt : α) = Parent.pt := rfl
-
-end
-
 /--
 info: GL_STATS {"decl":"SkippedStatsTest.withWhere","outcome":"skipped","reason":"termination hints or where block"}
 ---

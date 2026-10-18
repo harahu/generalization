@@ -345,12 +345,8 @@ whose syntax is described by `src`. Sets `truncated` if a heartbeat budget runs 
 `gradedWeakenings`).
 -/
 def lintTypeclassesFor (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
-    (src : DeclSource) (declName : Name) (truncated : IO.Ref Bool)
-    (omitCaveat : Bool := false) : TermElabM (Array GradedWeakening) := do
-  let caveat := if omitCaveat then
-    " This declaration's scope has one or more variables omitted from it, which means that the \
-      suggested weakening may require the declaration or its value to be modified, or the omit \
-      command to be removed, to be valid." else ""
+    (src : DeclSource) (declName : Name) (truncated : IO.Ref Bool) :
+    TermElabM (Array GradedWeakening) := do
   let gws ← gradedWeakenings cfg graph const src truncated
   for gw in gws do
     let (disp, target) ← describeCandidate const gw
@@ -364,12 +360,38 @@ def lintTypeclassesFor (cfg : LinterConfig) (graph : ClassGraph) (const : Consta
           if unconfirmed.isEmpty then ", but its binders might have to be modified"
           else ", and its binders might have to be as well"
         m!"the `{disp}` hypothesis of `{declName}` can be \
-          {target}{unconfirmedPart}{mightPart}.{caveat}"
+          {target}{unconfirmedPart}{mightPart}."
       -- For experiments only.
       | .unverified =>
         m!"[UNVERIFIED] the `{disp}` hypothesis of `{declName}` can be {target}."
     logLint linter.generalizeTypeclasses (← getRef) msg
   return gws
+
+
+/--
+The user names of the local variables that `t`, the info tree of the command `cmd`, binds at a
+binder written in `cmd` itself, as opposed to an earlier `variable` command, whose binders Lean
+elaborates anew for each declaration. An anonymous instance binder has no source position of its
+own, but the type written for it is elaborated just before it, so it takes the position of the
+latest info before it that has one. A name counts by its first binder, since the section variables
+and the signature are elaborated before the value, which may bind the same name again. A variable
+whose binder has no position is left out.
+-/
+def localBinders (t : InfoTree) (cmd : Syntax) : NameSet := Id.run do
+  let some start := cmd.getPos? | return {}
+  let init : NameMap String.Pos.Raw × Option String.Pos.Raw := ({}, none)
+  let (firstPos, _) := t.foldInfo (init := init)
+    fun _ info (firstPos, last?) =>
+      let pos? := info.stx.getPos? <|> last?
+      match info with
+      | .ofTermInfo ti =>
+        if !ti.isBinder || !ti.expr.isFVar then (firstPos, pos?) else
+        match ti.lctx.find? ti.expr.fvarId!, pos? with
+        | some d, some p =>
+          (if firstPos.contains d.userName then firstPos else firstPos.insert d.userName p, last?)
+        | _, _ => (firstPos, last?)
+      | _ => (firstPos, pos?)
+  return firstPos.foldl (init := {}) fun names n p => if start ≤ p then names.insert n else names
 
 
 /--
@@ -396,11 +418,7 @@ public def generalizeTypeclasses : Linter where
     -- Is the typeclass linter on?
     let tcOn := getLinterValue linter.generalizeTypeclasses lintOpts
     unless tcOn do logSkipped effectiveOpts "linter disabled"; return
-    let sectionBinders := (← getScope).varDecls.map (·.raw)
-    let omitTouched := hasOmitWrapper cmd || !(← getScope).omittedVars.isEmpty
-    let acceptOmits := generalizeTypeclasses.acceptOmits.get effectiveOpts
     let declVals := declValNodes declCmd
-    if omitTouched && !acceptOmits then logSkipped effectiveOpts "omitted variables"; return
     if declVals.size == 1 && hasUnreadParts declVals[0]! then
       logSkipped effectiveOpts "termination hints or where block"; return
     let hb := Core.getMaxHeartbeats effectiveOpts
@@ -433,8 +451,8 @@ public def generalizeTypeclasses : Linter where
         let src : DeclSource := {
           body := bodyStx,
           concl? := conclStx,
-          binders := (declSig?.map (·[0].getArgs)).getD #[] ++ sectionBinders ++
-            wrapperBinders wrappers
+          binders := (declSig?.map (·[0].getArgs)).getD #[] ++ wrapperBinders wrappers,
+          localBinders := localBinders infoTree cmd
         }
         -- Build class graph (or fetch it from cache).
         let some graph ← tryCatchRuntimeEx (some <$> cachedClassGraph) (fun _ => pure none)
@@ -451,7 +469,6 @@ public def generalizeTypeclasses : Linter where
               do
                 if ← hasTargetedBinder const.type then
                   let gws ← lintTypeclassesFor cfg graph const src thm.name truncated
-                    (omitCaveat := omitTouched)
                   return (.analyzed, if statsOn then gws.map statsOfGraded else #[])
                 else return (.untargeted, #[])
             ) (

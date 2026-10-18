@@ -40,22 +40,12 @@ public inductive WrapperClassification where
   -/
   | attributes
   /--
-  "Declaration wrappers" that we can ignore, because they don't affect our linter's verdict (in the
-  case of `omit`, it's merely that they are relatively unlikely to affect our linter's verdict "in
-  spirit"; see implementation notes below).
-
-  ---
-  **Implementation notes**
-
-  `omit`s are tricky for us, and can invalidate `gradedWeakenings`'s `SourceIntact` verdicts. The
-  most common case is a suggested weakening being sensible but requiring some `omit` command(s)
-  being adjusted. Ensuring that `gradedWeakenings`'s `SourceIntact` verdicts remain accurate in such
-  cases would require a significant amount of machinery, and `omit`s are relatively rare in Mathlib,
-  so the compromise we made was to skip declarations wrapped in or affected by `omit`s by default,
-  but provide the option `generalizeTypeclasses.acceptOmits`, which, when set to `true`, will lint
-  these same declarations as if there were no `omit`s at all. The idea is that the user is then
-  aware of the caveat that `omit`s impose on suggestions' `SourceIntact` verdicts when `omit`s are
-  involved.
+  "Declaration wrappers" that we can ignore, because they don't affect our linter's verdict. An
+  `include` or `omit` only decides which section variables the declaration takes, and the
+  elaborated declaration already reflects that. A weakening of a section variable that an earlier
+  `variable` command declares is graded as one whose binders might have to be modified (see
+  `SourceIntact.binders`), since that variable, and any `include` or `omit` naming it, is shared
+  with the rest of its scope.
   -/
   | ignorable
   /--
@@ -97,27 +87,8 @@ public def classifyWrapper (w: Syntax) : WrapperClassification :=
   | ``Parser.Command.variable => .binders
   | ``Parser.Command.attribute => .attributes
   | ``Parser.Command.include
-  -- Note: when `acceptOmits` is `false` (default), then `omit`s are not actually treated as
-  -- ignorable.
   | ``Parser.Command.omit => .ignorable
   | _ => .refused
-
-/--
-Returns `true` if any of `stx`'s "wrappers" is an `omit`.
-
----
-**Examples**
-
-```
-hasOmitWrapper ‹open Nat in set_option pp.all true in omit [Inhabited α] in …› = true
-hasOmitWrapper ‹open Nat in @[instance] theorem t : True := trivial› = false
-hasOmitWrapper ‹include x in theorem t : True := trivial› = false
-hasOmitWrapper ‹theorem t : True := trivial› = false
-```
--/
-public partial def hasOmitWrapper (stx : Syntax) : Bool :=
-  if stx.getKind != ``Parser.Command.in then false
-  else (stx.getArg 0).getKind == ``Parser.Command.omit || hasOmitWrapper (stx.getArg 2)
 
 /--
 Peel any `open … in`, `set_option … in`, `variable … in`, `attribute … in`, `include … in …`, and
@@ -132,8 +103,7 @@ omit [Monoid M] in
 
 then calling `peelWrappers stx` would return `.ok (#[‹open Nat›, ‹set_option pp.all true›],
 ‹@[instance] lemma something : … := …›)`. (Note that the `omit [Monoid M] in` wrapper is not among
-those returned; this is because we either ignore `omit`s entirely or, if `acceptOmits` is `false`
-(which it is by default), declarations with `omit`s are skipped by the linter altogether.)
+those returned, since it is `.ignorable`.)
 
 If the declaration includes any other wrappers (e.g. `unseal … in …`), or `stx` is not a
 declaration at all (e.g. a `mutual` block), return `.error` with the reason the linter skips it.

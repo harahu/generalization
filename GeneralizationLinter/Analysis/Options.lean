@@ -146,13 +146,6 @@ public register_option generalizeTypeclasses.buildHeartbeats : Nat := {
     a truncated analysis. Set this to 0 to turn this off. Defaults to 0."
 }
 
-public register_option generalizeTypeclasses.acceptOmits : Bool := {
-  defValue := false,
-  descr := "whether declarations within `omit … in` commands or within sections with any `omit …`
-    commands should be analyzed by the linter. Default: `false`. Warning: For these declarations,
-    the linter cannot guarantee that its suggestions will elaborate."
-}
-
 -- This option will (almost definitely) not be part of the final API. It is used for thesis
 -- experiments.
 public register_option generalizeTypeclasses.verify : Bool := {
