@@ -511,10 +511,10 @@ then appear consecutively and in order of preference (see `MCAContext.replacemen
 them should be accepted.
 -/
 public def mcaCandidates (graph : ClassGraph) (binders : Array TargetedBinder)
-    (reqs : Array Requirement) (cfg : LinterConfig := {}) (includeSubsumers : Bool := true) :
-    Array Candidate := Id.run do
-  let ctx : MCAContext :=
-    { graph, absencePolicy := cfg.absencePolicy, splitPolicy := cfg.splitPolicy, includeSubsumers }
+    (reqs : Array Requirement) (cfg : LinterConfig := {}) : Array Candidate := Id.run do
+  let ctx : MCAContext := {
+    graph, absencePolicy := cfg.absencePolicy, splitPolicy := cfg.splitPolicy,
+    includeSubsumers := cfg.includeSubsumers }
   let mut out : Array Candidate := #[]
   for b in binders do
     let bReqVerts : HashSet Vertex := reqs.foldl (init := {}) fun bReqVerts' req =>
