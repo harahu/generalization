@@ -132,59 +132,35 @@ def reshapeRedundantToDrops (declInfo : ConstantInfo) (verify : Bool) (candidate
 
 
 /--
-Filter out candidates in `candidates` that propose replacing a binder with the conclusion of the
-targeted declaration.
-
----
-**Examples**
-
-A lemma `lemma le {G : Type*} [Group G] : Monoid G` should not have `Group G` weakened to `Monoid
-G`.
-
-```
--- Suppose that `conclK` is that lemma's conclusion key, i.e., `conclusionKey? ‹lemma's type›` is
--- `some conclK`. Let `cand₁` and `cand₂` be candidates which would weaken its `[Group G]` binder to
--- `Monoid #0` and `Semigroup #0`, respectively.
-refuseConclusionAssumers (some conclK) #[cand₁, cand₂] = #[cand₂]
-refuseConclusionAssumers none #[cand₁, cand₂] = #[cand₁, cand₂]
-```
--/
-def refuseConclusionAssumers (conclK? : Option Key) (candidates : Array Candidate) :
-    Array Candidate :=
-  match conclK? with
-  -- If conclusion is not a class app, then there's no risk of a weakening targeting it, since our
-  -- weakenings are limited to typeclass weakenings.
-  | none => candidates
-  -- If conclusion is a class app, check if any replacement matches the conclusion. If so, drop
-  -- candidate. Graph vertices are universe-polymorphic while a monomorphic conclusion canonicalizes
-  -- to `.concrete`, so we compare against both forms, as `Vertex.witnesses` does when querying.
-  | some conclK =>
-    let concl := conclK.toVertex
-    let conclPoly := { concl with levels := .polymorphic }
-    candidates.filter fun c => c.replacements.all fun r => r != concl && r != conclPoly
-
-
-/--
-Return the conclusion of a declaration with type `declType` as a `Key`, wrapped as an `Option`.
-If the conclusion isn't a class application, then `none` is returned.
+Does the weakened statement `W` assume its own conclusion? That is the case when the conclusion is a
+class, and the `count` targeted binders of `W` from the `idx`th on, the replacements of a weakening,
+are equivalent to it: instance synthesis gives the conclusion from the replacements, and each
+replacement from the conclusion, with no other local instance. `W` then only says that its
+conclusion holds when it holds. A replacement that gives the conclusion without being given by it
+leaves a statement as meaningful as the original: that a weaker class implies the conclusion.
 
 ---
 **Examples**
 
 ```
-conclusionKey? ‹∀ {M : Type u} [CommMonoid M], Monoid M› = some {
-  name := `Monoid, pattern := #[#0], levels := .polymorphic, subst := #[M], forallArity := 0 }
-conclusionKey? ‹∀ {M : Type u} [MulOneClass M] (a : M), a * 1 = a› = none
--- The conclusion's own `∀`s are telescoped away as well.
-conclusionKey? ‹∀ {ι : Type} {f : ι → Type} [∀ i, Monoid (f i)], ∀ i, Monoid (f i)› = some {
-  name := `Monoid, pattern := #[#0], levels := .concrete #[0], subst := #[f i], forallArity := 0 }
+-- `Base` and `Twin` give each other by instances; `Mid` gives `Base`, but not conversely.
+assumesConclusion ‹∀ {α} [Twin α], Twin α› 0 1 = true
+assumesConclusion ‹∀ {α} [Base α], Twin α› 0 1 = true
+assumesConclusion ‹∀ {α} [Mid α], Base α› 0 1 = false
+assumesConclusion ‹∀ {α} [Base α] (a : α), a = a› 0 1 = false  -- the conclusion is not a class
 ```
 -/
-def conclusionKey? (declType : Expr) : MetaM (Option Key) :=
-  forallTelescope declType fun _ concl => do
-    if (← isClass? concl).isSome then
-      (try some <$> canonKey (← whnf concl) catch _ => return none)
-    else return none
+def assumesConclusion (W : Expr) (idx count : Nat) : MetaM Bool :=
+  forallTelescope W fun xs concl => do
+    unless (← isClass? concl).isSome do return false
+    let repls := (← targetedDecls xs).extract idx (idx + count)
+    let synthesizesFrom (insts : Array FVarId) (goal : Expr) : MetaM Bool :=
+      withReader (fun ctx => { ctx with
+          localInstances := ctx.localInstances.filter (insts.contains ·.fvar.fvarId!) }) do
+        return (← try trySynthInstance goal catch _ => pure .none) matches .some _
+    unless ← synthesizesFrom (repls.map (·.fvarId)) concl do return false
+    withLocalDecl `concl .instImplicit concl fun c =>
+      repls.allM fun r => synthesizesFrom #[c.fvarId!] r.type
 
 
 /--
@@ -200,8 +176,6 @@ public def guardedCandidates (config : LinterConfig) (G : ClassGraph) (declInfo 
   let chains ← getMIChains binders declInfo.type val
   let reqs ← getReqs binders chains
   let mut candidates := mcaCandidates G binders reqs config
-  if config.conclusionGuard then
-    candidates := refuseConclusionAssumers (← conclusionKey? declInfo.type) candidates
   if config.redundancyGuard then
     candidates ← reshapeRedundantToDrops declInfo config.verify candidates
   return candidates
@@ -553,6 +527,12 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       -- `W` is `const` with each weakening in `ws` (i.e., possibly more than one weakening)
       -- applied.
       let some W ← weakenedStatementType? const ws | return none
+      -- Each accepted weakening of an earlier binder replaced it with as many targeted binders as
+      -- it has replacements, shifting the index of this one.
+      let idx := accepted.foldl (init := (candidate.binder.idx : Int)) fun i (j, repls) =>
+        if j < candidate.binder.idx then i + repls.size - 1 else i
+      if cfg.conclusionGuard && !candidate.replacements.isEmpty then
+        if ← assumesConclusion W idx.toNat candidate.replacements.size then return none
       -- `W` must actually be more general; neither gate below checks that (see
       -- `weakenedImpliesOriginal`).
       if cfg.generalityGuard then
@@ -575,8 +555,6 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       -- Building a split can reorder its binders to satisfy dependencies. Track and report the
       -- classes in the verified statement's order, so later fixpoint passes address the right
       -- replacements and the printed binders can be elaborated in that order.
-      let idx := accepted.foldl (init := (candidate.binder.idx : Int)) fun i (j, repls) =>
-        if j < candidate.binder.idx then i + repls.size - 1 else i
       let binders ← getTargetedBinders W
       let repls := (binders.extract idx.toNat (idx.toNat + candidate.replacements.size)).map
         (·.toVertex)
