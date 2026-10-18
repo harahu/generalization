@@ -289,8 +289,8 @@ def sccDemotedHeads : List Name := [`NSMul, `ZSMul, `NPow, `ZPow, `OfNat, `Trans
 
 /--
 The deterministic "algorithm" by which we pick representatives when `sccDemotedHeads` doesn't
-already force our decision. We also use this to choose a minimal common ancestor when
-`minCommonAncestors` would otherwise return multiple.
+already force our decision. Its order also breaks ties between equally general minimal common
+ancestors in `MCAContext.minCommonAncestors`.
 
 ---
 **Examples**
@@ -323,12 +323,19 @@ def sccRepresentative? (scc : Array Vertex) : Option Vertex :=
   minByName? (scc.filter fun v => !sccDemotedHeads.contains v.name) <|> minByName? scc
 
 
+/-- The number of SCCs that `v` reaches in `ctx.graph`, its own included, or `0` if `v` is no vertex. -/
+def MCAContext.downSetSize (ctx : MCAContext) (v : Vertex) : Nat :=
+  let cond := ctx.graph.condensation
+  match cond.componentsMap[v]? with
+  | some i => (cond.downSetsByIndex.getD i {}).size
+  | none => 0
+
 /--
-Returns a minimal common ancestor (MCA) of `reqVerts` reachable from `query.binder`, retaining
-the source witness and substitution that specialize its replacement. If none exists, returns
-`none`. If more than one such MCA exists, uses `minByName?` to
-tie-break incomparable MCAs, and `sccRepresentative?` to tie-break the comparable ones (which will
-inevitably be equipotent).
+Returns the minimal common ancestors (MCAs) of `reqVerts` reachable from `query.binder`, retaining
+the source witness and substitution that specialize each one's replacement. Equipotent MCAs, which
+share an SCC, are represented by one, picked by `sccRepresentative?`. Incomparable MCAs come most
+general first: an MCA implying fewer classes (by `MCAContext.downSetSize`) states less, and so makes
+for the weaker hypothesis. Ties fall to `minByName?`'s order.
 
 ---
 **Implementation notes**
@@ -375,8 +382,8 @@ subsumers in every way except also being universe polymorphic.
 
 **See also:** `minCommonAncestors`.
 -/
-def MCAContext.minCommonAncestor? (ctx : MCAContext) (query : BinderQuery)
-    (reqVerts : Array Vertex) : Option MatchedAncestor := do
+def MCAContext.minCommonAncestors (ctx : MCAContext) (query : BinderQuery)
+    (reqVerts : Array Vertex) : Array MatchedAncestor :=
   let witnessSets := reqVerts.map
     fun reqVert => HashSet.ofArray (reqVert.witnesses ctx.includeSubsumers)
   -- Capture reachable source/target witnesses during selection instead of discarding the
@@ -386,8 +393,15 @@ def MCAContext.minCommonAncestor? (ctx : MCAContext) (query : BinderQuery)
       let ancestors := scc.filterMap (ctx.matchedAncestor? query)
       let some v := sccRepresentative? (ancestors.map (·.vertex)) | none
       ancestors.find? (·.vertex == v)
-  let some v := minByName? (mcas.map (·.vertex)) | none
-  mcas.find? (·.vertex == v)
+  -- `insertionSort` is stable, so vertices that tie on both keys keep the condensation's order.
+  mcas.insertionSort fun m m' =>
+    let (k, k') := (ctx.downSetSize m.vertex, ctx.downSetSize m'.vertex)
+    k < k' || (k == k' && (m.vertex.name.cmp m'.vertex.name).isLT)
+
+/-- The first of `MCAContext.minCommonAncestors`, if any. -/
+def MCAContext.minCommonAncestor? (ctx : MCAContext) (query : BinderQuery)
+    (reqVerts : Array Vertex) : Option MatchedAncestor :=
+  (ctx.minCommonAncestors query reqVerts)[0]?
 
 /-- Is the queried binder strictly stronger than the matched graph ancestor? -/
 def MCAContext.strictlyStrongerThan (ctx : MCAContext) (query : BinderQuery)
@@ -487,21 +501,22 @@ split.
 def MCAContext.replacements (ctx : MCAContext) (query : BinderQuery)
     (reqVerts : Array Vertex) : Array (Array MatchedAncestor) :=
   if reqVerts.isEmpty then #[#[]] else
-  let singleClass? :=
-    (ctx.minCommonAncestor? query reqVerts).filter (ctx.strictlyStrongerThan query)
-  let single := singleClass?.toArray.map (#[·])
+  let singleClasses :=
+    (ctx.minCommonAncestors query reqVerts).filter (ctx.strictlyStrongerThan query)
+  let singles := singleClasses.map (#[·])
   match ctx.splitPolicy with
-  | .forbid => single
-  | .allow => single ++ (ctx.mcasPartition? query reqVerts).toArray
+  | .forbid => singles
+  | .allow => singles ++ (ctx.mcasPartition? query reqVerts).toArray
   | .prefer =>
-    match ctx.mcasPartition? query reqVerts, singleClass? with
-    | some mcas, some mca =>
-      -- If any of the `mcaᵢ` is stronger than or equipotent to `mca`, then there's no point in
-      -- splitting `b` up, so we just return `#[mca]` in that case.
-      if mcas.all (fun mcaᵢ => ¬ ctx.reachesWitnessed mcaᵢ.vertex mca.vertex) then #[mcas, #[mca]]
-      else #[#[mca]]
-    | some mcas, none => #[mcas]
-    | none, _ => single
+    match ctx.mcasPartition? query reqVerts with
+    | some mcas =>
+      -- If any of the `mcaᵢ` is stronger than or equipotent to a single class, then there's no
+      -- point in splitting `b` up, so we just return the single classes in that case.
+      if mcas.all fun mcaᵢ => singleClasses.all fun mca =>
+          ¬ ctx.reachesWitnessed mcaᵢ.vertex mca.vertex then
+        #[mcas] ++ singles
+      else singles
+    | none => singles
 
 
 /--
@@ -529,21 +544,22 @@ public def mcaCandidates (graph : ClassGraph) (binders : Array TargetedBinder)
     if options.isEmpty then continue
     -- Subsumption can sometimes lead to key args getting "modified": for example, `α` in the
     -- targeted binder becoming `αᵒᵖ` in the weakening candidate. Sometimes this can be genuinely
-    -- desirable, but most of the time it's not, so, for the time being, we just try again with
-    -- subsumption off if we are met with such a situation.
+    -- desirable, but most of the time it's not, so, for the time being, we keep the options that
+    -- reuse the key args, followed by those that a search with subsumption off finds and that
+    -- reuse them too. Only if there are none do the other options stand.
+    let reuses (o : Array MatchedAncestor) : Bool := o.all (ctx.reusesKeyArgsOf b ·.replacement)
     let options :=
-      if options.all (·.all (fun m => ctx.reusesKeyArgsOf b m.replacement)) then
-        options
+      if options.all reuses then options
       else
         let ctxOff := { ctx with includeSubsumers := false }
         let queryOff : BinderQuery := {
           binder := b
           sources := b.toVertex.matchedWitnesses false
         }
-        let alt := ctxOff.replacements queryOff (ctxOff.filterReqVerts b bReqVerts)
-        if !alt.isEmpty && alt.all (·.all (fun m => ctxOff.reusesKeyArgsOf b m.replacement)) then
-          alt
-        else options
+        let kept := options.filter reuses
+        let alt := (ctxOff.replacements queryOff (ctxOff.filterReqVerts b bReqVerts)).filter
+          fun o => reuses o && !kept.any (·.map (·.replacement) == o.map (·.replacement))
+        if kept.isEmpty && alt.isEmpty then options else kept ++ alt
     for ancestors in options do
       let shape := match ancestors.map (·.replacement) with
         | #[] => WeakeningShape.drop
