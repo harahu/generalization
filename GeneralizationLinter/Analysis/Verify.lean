@@ -480,7 +480,23 @@ public def withHeartbeatBudget {α : Type} (truncated : IO.Ref Bool) (budget : N
 public structure GradedWeakening where
   candidate : Candidate
   grade : WeakeningGrade
+  /--
+  The type of each of the candidate's replacements as it stands in the weakened statement that was
+  verified, printed as a suggestion shows it (see `printedTargetedTypes`). Empty for an unverified
+  weakening.
+  -/
+  printed : Array String := #[]
 deriving Inhabited
+
+
+/--
+The types of the targeted binders of `W`, in order, printed as a suggestion shows them: the way a
+user would write them, so without universe levels, which reification can leave open.
+-/
+def printedTargetedTypes (W : Expr) : MetaM (Array String) :=
+  targetedBinderTelescope W fun lds _ =>
+    withOptions (pp.universes.set · false) do
+      lds.mapM fun ld => return toString (← ppExpr ld.type)
 
 
 /--
@@ -555,9 +571,8 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       -- Building a split can reorder its binders to satisfy dependencies. Track and report the
       -- classes in the verified statement's order, so later fixpoint passes address the right
       -- replacements and the printed binders can be elaborated in that order.
-      let binders ← getTargetedBinders W
-      let repls := (binders.extract idx.toNat (idx.toNat + candidate.replacements.size)).map
-        (·.toVertex)
+      let (lo, hi) := (idx.toNat, idx.toNat + candidate.replacements.size)
+      let repls := ((← getTargetedBinders W).extract lo hi).map (·.toVertex)
       unless repls.size == candidate.replacements.size do return none
       let shape := match repls with
         | #[] => WeakeningShape.drop
@@ -565,7 +580,10 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
         | vs => WeakeningShape.split vs
       return some {
         candidate := { candidate with shape },
-        grade := .holds { binders := bindersG, concl := conclG, body := bodyG }
+        grade := .holds { binders := bindersG, concl := conclG, body := bodyG },
+        -- A binder's type mentions only binders before it, which no later weakening of this pass
+        -- changes, so this is also how it stands in the pass's final statement.
+        printed := (← printedTargetedTypes W).extract lo hi
       }
     if let some g := g? then
       accepted := accepted.push (candidate.binder.idx, g.candidate.replacements)
@@ -651,6 +669,8 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
     | some concl' => conclSourceIntact finalW concl' const.levelParams cfg.buildHeartbeats
     | none => pure false
   let binderNames ← targetedBinderTelescope const.type fun lds _ => pure (lds.map (·.userName))
+  -- `table` lists the targeted binders of `finalW` in order.
+  let printed := (← printedTargetedTypes finalW).zip table
   let mut graded : Array GradedWeakening := #[]
   for b in binders do
     let entries := table.filter (·.1 == b.idx)
@@ -665,5 +685,6 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
       | none => false
     graded := graded.push
       { candidate := { binder := b, shape },
-        grade := .holds { binders := bindersG, concl := conclG, body := bodyG } }
+        grade := .holds { binders := bindersG, concl := conclG, body := bodyG },
+        printed := printed.filterMap fun (s, j, r?) => if j == b.idx && r?.isSome then s else none }
   return graded

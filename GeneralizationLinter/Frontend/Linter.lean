@@ -140,9 +140,11 @@ def hasTargetedBinder (type : Expr) : MetaM Bool := do
 
 
 /--
-Given a weakening candidate `candidate` for a declaration with constant info `const`, returns a pair
-of strings, the first string indicating what the existing binder looks like, and the second string
-indicating how said binder may be weakened.
+Given a graded weakening `gw` of a declaration with constant info `const`, returns a pair of strings,
+the first string indicating what the existing binder looks like, and the second string indicating
+how said binder may be weakened. The replacements are printed as they stand in the weakened
+statement that was verified (`GradedWeakening.printed`), or, for an unverified weakening, by their
+class names.
 
 ---
 **Examples**
@@ -150,20 +152,21 @@ indicating how said binder may be weakened.
 ```
 -- `const` is `theorem foo {G : Type} [Group G] (a : G) : a = a` and `b` is its `[Group G]` binder;
 -- `const'`/`b'` are the same declaration with `{inst : Group G}` in place of `[Group G]`.
-describeCandidate const ⟨b, .drop⟩ = ("[Group G]", "removed (dropped)")
-describeCandidate const ⟨b, .weaken ⟨`Monoid, #[#0], .polymorphic⟩⟩ =
+describeCandidate const ⟨⟨b, .drop⟩, g, #[]⟩ = ("[Group G]", "removed (dropped)")
+describeCandidate const ⟨⟨b, .weaken ⟨`Monoid, #[#0], .polymorphic⟩⟩, g, #["Monoid G"]⟩ =
   ("[Group G]", "weakened to `Monoid G`")
-describeCandidate const ⟨b, .split #[⟨`Mul, #[#0], .polymorphic⟩, ⟨`One, #[#0], .polymorphic⟩]⟩ =
+describeCandidate const ⟨⟨b, .split #[⟨`Mul, #[#0], .polymorphic⟩, ⟨`One, #[#0], .polymorphic⟩]⟩, g,
+    #["Mul G", "One G"]⟩ =
   ("[Group G]", "split into `Mul G`, `One G`")
--- A replacement that cannot be reified into the binder's type shows just its class name.
-describeCandidate const ⟨b, .weaken ⟨`Pow, #[#0, #1], .polymorphic⟩⟩ =
-  ("[Group G]", "weakened to `Pow`")
-describeCandidate const' ⟨b', .weaken ⟨`Monoid, #[#0], .polymorphic⟩⟩ =
+describeCandidate const ⟨⟨b, .weaken ⟨`Monoid, #[#0], .polymorphic⟩⟩, .unverified, #[]⟩ =
+  ("[Group G]", "weakened to `Monoid`")
+describeCandidate const' ⟨⟨b', .weaken ⟨`Monoid, #[#0], .polymorphic⟩⟩, g, #["Monoid G"]⟩ =
   ("{inst : Group G}", "weakened to `Monoid G`")
 ```
 -/
-def describeCandidate (const : ConstantInfo) (candidate : Candidate) : MetaM (String × String) :=
+def describeCandidate (const : ConstantInfo) (gw : GradedWeakening) : MetaM (String × String) :=
   targetedBinderTelescope const.type fun lds _ => do
+    let candidate := gw.candidate
     let old? := lds[candidate.binder.idx]?
     -- Targeted binder (unbracketed)
     let dispUnbracketed ← match old? with
@@ -183,21 +186,12 @@ def describeCandidate (const : ConstantInfo) (candidate : Candidate) : MetaM (St
       | .strictImplicit => s!"⦃{named}⦄"
       | .implicit => "{" ++ named ++ "}"
       | _ => s!"[{dispUnbracketed}]"
-    -- `replaceBinderType?` is the reification the verifier uses, but it runs here on `const.type`,
-    -- whereas the verifier runs it on `W`, with earlier accepted weakenings applied and, in a
-    -- split, with replacements `0` to `i - 1` in scope. So this is the replacement's type, not
-    -- verbatim the term that was graded. Both fallbacks degrade to the bare class name.
-    let render (repl : Vertex) : MetaM String := do
-      let some ld := old? | return toString repl.name
-      let some e ← replaceBinderType? ld.type repl | return toString repl.name
-      -- reification leaves the universes it could not pin open, and a suggestion is meant to be
-      -- pasted, so print the levels the way a user would write them: not at all
-      withOptions (pp.universes.set · false) do return toString (← Meta.ppExpr e)
-    let target ← match candidate.shape with
-      | .drop => pure "removed (dropped)"
-      | .weaken weakerVertex => pure s!"weakened to `{← render weakerVertex}`"
-      | .split weakerVertices => pure ("split into " ++
-          ", ".intercalate (← weakerVertices.toList.mapM fun t => return s!"`{← render t}`"))
+    let repls := candidate.replacements
+    let printed := if gw.printed.size == repls.size then gw.printed else repls.map (toString ·.name)
+    let target := match candidate.shape with
+      | .drop => "removed (dropped)"
+      | .weaken _ => s!"weakened to `{printed[0]!}`"
+      | .split _ => "split into " ++ ", ".intercalate (printed.toList.map (s!"`{·}`"))
     return (disp, target)
 
 
@@ -359,8 +353,7 @@ def lintTypeclassesFor (cfg : LinterConfig) (graph : ClassGraph) (const : Consta
       command to be removed, to be valid." else ""
   let gws ← gradedWeakenings cfg graph const src truncated
   for gw in gws do
-    let c := gw.candidate
-    let (disp, target) ← describeCandidate const c
+    let (disp, target) ← describeCandidate const gw
     let msg := match gw.grade with
       | .holds { binders, body, concl } =>
         let unconfirmed := (if !concl then ["its conclusion"] else []) ++
