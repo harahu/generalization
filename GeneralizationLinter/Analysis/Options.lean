@@ -174,7 +174,7 @@ public register_option generalizeTypeclasses.includeSubsumers : Bool := {
 public register_option generalizeTypeclasses.conclusionGuard : Bool := {
   defValue := true,
   descr := "[Warning: disabling this option is experimental]. Whether weakenings that result in the
-    conclusion being assumed should be blocked."
+    conclusion being assumed, up to instance synthesis, should be blocked."
 }
 
 -- This option will (almost definitely) not be part of the final API. It is used for thesis
