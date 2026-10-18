@@ -42,6 +42,7 @@ public structure ClassEdge where
   src : Vertex
   /-- Target vertex of the edge. This is the _weaker_ class, the one we're weakening _to_. -/
   tgt : Vertex
+deriving BEq
 
 /-! ## Extraction -/
 
@@ -383,13 +384,8 @@ def isSubsingletonClass (name : Name) (synthesize : Bool := true) : MetaM Bool :
 
 
 /--
-Scans every name in `names` (which is expected to be a list of instance declarations), collecting
-weakening edges and taking note of classes that _may_ be subsingletons as it goes.
-
----
-**Implementation notes**
-
-This is quite expensive, taking several seconds, and so we try to run it as seldomly as possible.
+Scans the instance declaration `name`, returning the weakening edge it yields, if any, and the class
+it suggests _may_ be a subsingleton, if any: `C` for a conclusion of the form `Subsingleton (C …)`.
 
 ---
 **Examples** (edges abbreviated as in `extractEdge?`)
@@ -398,38 +394,33 @@ This is quite expensive, taking several seconds, and so we try to run it as seld
 -- instance Monoid.toSemigroup {α} [Monoid α] : Semigroup α
 -- instance Fintype.subsingleton (α : Type*) : Subsingleton (Fintype α)
 -- instance Prod.instMonoid [Monoid M] [Monoid N] : Monoid (M × N)
-ClassGraph.scanInstances #[`Monoid.toSemigroup, `Fintype.subsingleton, `Prod.instMonoid] =
-  (#[{ src := `Monoid, tgt := `Semigroup }], {`Fintype})
-ClassGraph.scanInstances #[] = (#[], {})
+ClassGraph.scanInstance `Monoid.toSemigroup = (some { src := `Monoid, tgt := `Semigroup }, none)
+ClassGraph.scanInstance `Fintype.subsingleton = (none, some `Fintype)
+ClassGraph.scanInstance `Prod.instMonoid = (none, none)
 ```
 -/
-public def ClassGraph.scanInstances (names : Array Name) :
-    MetaM (Array ClassEdge × HashSet Name) := do
-  let env ← getEnv
-  let mut edges : Array ClassEdge := #[]
-  let mut subHeads : HashSet Name := {}
-  for name in names do
-    if let some e ← extractEdge? name then
-      edges := edges.push e
-    if let some const := env.find? name then
-      let concl := const.type.getForallBody
-      if concl.getAppFn.isConstOf ``Subsingleton then
-        if let some h := concl.getAppArgs.back?.bind (·.getAppFn.constName?) then
-          subHeads := subHeads.insert h
-  return (edges, subHeads)
+public def ClassGraph.scanInstance (name : Name) : MetaM (Option ClassEdge × Option Name) := do
+  let edge? ← extractEdge? name
+  let subHead? := ((← getEnv).find? name).bind fun const =>
+    let concl := const.type.getForallBody
+    if concl.getAppFn.isConstOf ``Subsingleton then
+      concl.getAppArgs.back?.bind (·.getAppFn.constName?)
+    else none
+  return (edge?, subHead?)
+
+
+/-- The condensation of the digraph whose edges are `edges`. -/
+public def ClassGraph.condenseEdges (edges : Array ClassEdge) : Condensation Vertex :=
+  (edges.foldl (init := ({} : Digraph Vertex)) fun g e => g.insertEdge e.src e.tgt).condense
 
 
 /--
-Assembles weakening edges and heads of subsingleton classes into a `ClassGraph`.
-
----
-**Implementation notes**
-
-This function is relatively fast compared to `ClassGraph.scanInstances`, so we re-run it on local
-rebuilds.
+Assembles weakening edges and heads of subsingleton classes into a `ClassGraph`. The condensation,
+which is the slower part, depends on `edges` alone; pass `condensation` to reuse the one of a graph
+with the same edges.
 -/
-public def ClassGraph.assemble (edges : Array ClassEdge) (subHeads : HashSet Name) :
-    MetaM ClassGraph := do
+public def ClassGraph.assemble (edges : Array ClassEdge) (subHeads : HashSet Name)
+    (condensation : Condensation Vertex := ClassGraph.condenseEdges edges) : MetaM ClassGraph := do
   -- We derive the set of vertices by just taking all the endpoints of the edges we collected, which
   -- ensures we don't have isolated vertices (not something that we strictly require, but it doesn't
   -- hurt, since we would never be able to weaken a binder matching an isolated vertex anyway, since
@@ -441,9 +432,8 @@ public def ClassGraph.assemble (edges : Array ClassEdge) (subHeads : HashSet Nam
     let worthSynthesizing := subHeads.contains name
     if ← isSubsingletonClass name (synthesize := worthSynthesizing) then
       subsingletonClasses := subsingletonClasses.insert name
-  let digraph := edges.foldl (init := ({} : Digraph Vertex)) fun g e => g.insertEdge e.src e.tgt
   return {
     edges,
     isSubsingleton := fun v => subsingletonClasses.contains v.name,
-    condensation := digraph.condense
+    condensation
   }
