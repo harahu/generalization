@@ -473,30 +473,10 @@ def subsumerCountBound (args : Array Expr) : Nat :=
 
 
 /--
-If the number of subsumers of `v.pattern` isn't estimated to exceed `maxCombined` (default 2048),
-then all proper subsumers of `v.pattern` (i.e., subsumers of `v.pattern` that are not equal to
-`v.pattern`) are returned as an array of vertices, where each output vertex `w` inherits all fields
-from `v` except for `v.pattern`, which instead is set to the subsumer. If the estimate does exceed
-`maxCombined`, `#[]` is returned.
-
----
-**Examples**
-
-```
--- v.pattern = #[List (.bvar 0)]
-v.properSubsumers   = #[{ v with pattern := #[.bvar 0] }]
-v.properSubsumers 1 = #[]
--- v.pattern = #[.bvar 0, .bvar 0]
-v.properSubsumers   = #[{ v with pattern := #[.bvar 0, .bvar 1] }]
--- v.pattern = #[.bvar 0, .bvar 1]
-v.properSubsumers   = #[]
-```
+The largest `subsumerCountBound` of a query's pattern for which `Vertex.matchedWitnesses` extends the
+query to its subsumers.
 -/
-public def Vertex.properSubsumers (v : Vertex) (maxCombined : Nat := 2048) : Array Vertex :=
-  if subsumerCountBound v.pattern > maxCombined then #[]
-  else (subsumers v.pattern).foldl (init := #[]) fun out args =>
-    if args == v.pattern then out
-    else out.push { v with pattern := args }
+def maxSubsumerCount : Nat := 2048
 
 /--
 A graph witness together with its substitution into the original query's argument pattern.
@@ -515,16 +495,32 @@ public def VertexWitness.specialize? (w : VertexWitness) (pattern : Array Expr) 
   else some (pattern.map (·.instantiate w.subst))
 
 /--
-The same witnesses, order, universe variants, and expansion bound as `Vertex.witnesses`, retaining
-the substitutions already produced by `subsumersGo`. An original-pattern witness has the identity
+Given a vertex `query`, returns the vertices that match `query`, each with its substitution into
+`query`'s pattern. This is used to match non-universe-polymorphic vertices with both the
+corresponding non-universe-polymorphic vertex _and_ the corresponding universe-polymorphic vertex.
+
+If `includeSubsumers` is `true` (default `false`), then the query is extended to every proper
+subsumer of its pattern (see `subsumers`), unless their number may exceed `maxSubsumerCount`. The
+substitutions are the ones `subsumersGo` produces; the original pattern has the identity
 substitution. Substitutions are local to this query and do not enlarge the shared class graph.
+
+**Note:** The returned vertices are _not_ guaranteed to be vertices in the class graph. They're just
+"vertices" in the sense that they're `Vertex` records.
+
+---
+**Examples** (substitutions omitted)
+
+* `Small.{0} α` will match `Small.{0} α` and `Small α` (the latter we understand to be
+  universe-polymorphic).
+* `Small α` will only match `Small α`.
+* With `includeSubsumers`, `Monoid (List α)` will match `Monoid (List α)` and `Monoid α`.
 -/
 public def Vertex.matchedWitnesses (query : Vertex) (includeSubsumers : Bool := false) :
     Array VertexWitness := Id.run do
   let range := query.pattern.foldl (fun n p => max n p.looseBVarRange) 0
   let identity := (Array.range range).map Expr.bvar
   let mut witnesses : Array VertexWitness := #[{ vertex := query, subst := identity }]
-  if includeSubsumers && subsumerCountBound query.pattern ≤ 2048 then
+  if includeSubsumers && subsumerCountBound query.pattern ≤ maxSubsumerCount then
     for (pattern, subst) in subsumersGo #[] query.pattern.toList do
       unless pattern == query.pattern do
         witnesses := witnesses.push { vertex := { query with pattern }, subst }
@@ -534,28 +530,6 @@ public def Vertex.matchedWitnesses (query : Vertex) (includeSubsumers : Bool := 
     | .concrete _ => #[w, { w with vertex := { w.vertex with levels := .polymorphic } }]
 
 
-/--
-Given a vertex `query`, returns the array of vertices that match `query`. This is used to match
-non-universe-polymorphic vertices with both the corresponding non-universe-polymorphic vertex _and_
-the corresponding universe-polymorphic vertex.
-
-If `includeSubsumers` is `true` (default `false`), then the query is extended to any subsuming
-vertices.
-
-**Note:** The returned vertices are _not_ guaranteed to be vertices in the class graph. They're just
-"vertices" in the sense that they're `Vertex` records.
-
----
-**Examples**
-
-* `Small.{0} α` will match `Small.{0} α` and `Small α` (the latter we understand to be
-  universe-polymorphic).
-* `Small α` will only match `Small α`.
--/
-public def Vertex.witnesses (query : Vertex) (includeSubsumers : Bool := false) :
-    Array Vertex :=
-  let vertices := if includeSubsumers then #[query] ++ query.properSubsumers else #[query]
-  vertices.flatMap fun v =>
-    match v.levels with
-    | .polymorphic => #[v]
-    | .concrete _ => #[v, { v with levels := .polymorphic }]
+/-- The vertices of `Vertex.matchedWitnesses`, without their substitutions. -/
+public def Vertex.witnesses (query : Vertex) (includeSubsumers : Bool := false) : Array Vertex :=
+  (query.matchedWitnesses includeSubsumers).map (·.vertex)

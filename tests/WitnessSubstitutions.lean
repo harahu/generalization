@@ -8,8 +8,8 @@ import GeneralizationLinter
 /-!
 # Retaining substitutions with graph witnesses
 
-Witness generation keeps its original order and expansion bound. Each retained substitution
-reconstructs the original query, including repeated, structured, sparse, and closed arguments.
+Each substitution retained with a graph witness reconstructs the original query, including
+repeated, structured, sparse, and closed arguments.
 -/
 
 open Lean GeneralizationLinter
@@ -17,10 +17,7 @@ open Lean GeneralizationLinter
 private def checkWitnesses (pattern : Array Expr) (levels : UniverseLevels) : IO Unit := do
   let query : Vertex := { name := `Probe, pattern, levels }
   for includeSubsumers in [false, true] do
-    let ws := query.matchedWitnesses includeSubsumers
-    unless ws.map (·.vertex) == query.witnesses includeSubsumers do
-      throw (IO.userError "Witness order, universe variants, or expansion bound changed")
-    for w in ws do
+    for w in query.matchedWitnesses includeSubsumers do
       unless w.specialize? w.vertex.pattern == some pattern do
         throw (IO.userError "Witness substitution does not reconstruct its query")
 
