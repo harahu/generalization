@@ -466,21 +466,15 @@ public def bindersMention (binders : Array Syntax) (name : Name) : Bool :=
         !name.isAnonymous && s.getId.eraseMacroScopes.getRoot == name)).isSome
 
 
-/-
-Set when a heartbeat budget is exhausted. Without it a truncated declaration is indistinguishable
-from a declined one: both report no emissions. Cleared per declaration by the linter.
--/
-public initialize budgetExhaustedRef : IO.Ref Bool ← IO.mkRef false
-
-
 /--
 Run `x` with `maxHeartbeats` set to the lesser of `budget` and the ambient `maxHeartbeats`, treating
 a value of `0` ("unlimited") as larger than any other. So a `budget` of `0` lifts only the linter's
 own limit: the ambient one still applies. `x` runs under `withCurrHeartbeats`, so it gets a fresh
 allowance of that many heartbeats rather than whatever is left of the ambient one.
 
-If a runtime (or other non-interrupt) exception occurs while running `x`, it is caught,
-`budgetExhaustedRef` is set, and `dflt` ("default") is returned.
+If a runtime (or other non-interrupt) exception occurs while running `x`, it is caught, `truncated`
+is set, and `dflt` ("default") is returned. Without that flag, a truncated analysis would be
+indistinguishable from a declined one: both report no weakenings.
 
 If both `budget` and the ambient `maxHeartbeats` are `0`, runs `x` directly without any restrictions
 or exception handling.
@@ -490,16 +484,16 @@ or exception handling.
 
 ```
 -- ambient `maxHeartbeats 200_000`, i.e. `Core.Context.maxHeartbeats = 200_000_000`
-withHeartbeatBudget 1_000 dflt x             -- `x` gets a fresh 1_000 heartbeats
-withHeartbeatBudget 1_000_000_000_000 dflt x -- `x` gets a fresh 200_000_000 heartbeats
-withHeartbeatBudget 0 dflt x                 -- `x` gets a fresh 200_000_000 heartbeats
+withHeartbeatBudget t 1_000 dflt x             -- `x` gets a fresh 1_000 heartbeats
+withHeartbeatBudget t 1_000_000_000_000 dflt x -- `x` gets a fresh 200_000_000 heartbeats
+withHeartbeatBudget t 0 dflt x                 -- `x` gets a fresh 200_000_000 heartbeats
 -- ambient `maxHeartbeats 0`
-withHeartbeatBudget 1_000 dflt x             -- `x` gets a fresh 1_000 heartbeats
-withHeartbeatBudget 0 dflt x                 -- `x` runs unrestricted
+withHeartbeatBudget t 1_000 dflt x             -- `x` gets a fresh 1_000 heartbeats
+withHeartbeatBudget t 0 dflt x                 -- `x` runs unrestricted
 ```
 -/
-public def withHeartbeatBudget {α : Type} (budget : Nat) (dflt : α) (x : TermElabM α) :
-    TermElabM α := do
+public def withHeartbeatBudget {α : Type} (truncated : IO.Ref Bool) (budget : Nat) (dflt : α)
+    (x : TermElabM α) : TermElabM α := do
   let ambient := (← readThe Core.Context).maxHeartbeats
   let effectiveMax :=
     if budget == 0 then ambient else if ambient == 0 then budget else min budget ambient
@@ -508,7 +502,7 @@ public def withHeartbeatBudget {α : Type} (budget : Nat) (dflt : α) (x : TermE
     (withTheReader Core.Context (fun c => { c with maxHeartbeats := effectiveMax })
       -- `withCurrHeartbeats` resets the heartbeat budget. #TODO
       (withCurrHeartbeats x))
-    (fun _ => do budgetExhaustedRef.set true; pure dflt)
+    (fun _ => do truncated.set true; pure dflt)
 
 public structure GradedWeakening where
   candidate : Candidate
@@ -535,11 +529,13 @@ def weakeningVacuousGiven (const : ConstantInfo) (accepted : Array (Nat × Array
 /--
 One pass of `gradedWeakenings`: the verified, graded weakenings of `const`, each accepted given the
 ones before it, together with the accepted weakenings as `(binder index, replacements)` pairs, which
-is the form `weakenedStatementType?` takes.
+is the form `weakenedStatementType?` takes. Sets `truncated` if a heartbeat budget runs out.
 -/
 def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
-    (src : DeclSource) : TermElabM (Array GradedWeakening × Array (Nat × Array Vertex)) := do
-  let candidates ← withHeartbeatBudget cfg.generationHeartbeats #[] (guardedCandidates cfg graph const)
+    (src : DeclSource) (truncated : IO.Ref Bool) :
+    TermElabM (Array GradedWeakening × Array (Nat × Array Vertex)) := do
+  let candidates ← withHeartbeatBudget truncated cfg.generationHeartbeats #[]
+    (guardedCandidates cfg graph const)
   if candidates.isEmpty then return (#[], #[])
   -- Get the binder names, i.e., for `[inst : Monoid M]`, this would be `` `inst ``. Note that
   -- `TargetedBinder.className` is the name of the _class_, i.e., for `[inst : Monoid M]`, it would
@@ -552,7 +548,7 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
     -- only a fallback for an earlier one that failed.
     if accepted.any (·.1 == candidate.binder.idx) then continue
     let ws := accepted.push (candidate.binder.idx, candidate.replacements)
-    let g? ← withHeartbeatBudget cfg.perCandidateHeartbeats none do
+    let g? ← withHeartbeatBudget truncated cfg.perCandidateHeartbeats none do
       -- For experimental ablation measurements only.
       if !cfg.verify then return some { candidate, grade := .unverified }
       -- `W` is `const` with each weakening in `ws` (i.e., possibly more than one weakening)
@@ -639,10 +635,14 @@ re-elaborated from source, is linted again, until a pass accepts nothing. Each w
 reported once, per binder of `const`, as what that binder became at the end, and graded against the
 final statement. If the value cannot be re-elaborated from source, there is no value to lint the
 next pass with, and the passes stop there.
+
+`truncated` is set if a heartbeat budget runs out on the way, so that the analysis may have missed
+weakenings. The caller owns it, one per declaration: linters for different commands can run
+concurrently, so the flag must not be shared between declarations.
 -/
 public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
-    (src : DeclSource) : TermElabM (Array GradedWeakening) := do
-  let (firstGraded, firstAccepted) ← gradedPass cfg graph const src
+    (src : DeclSource) (truncated : IO.Ref Bool) : TermElabM (Array GradedWeakening) := do
+  let (firstGraded, firstAccepted) ← gradedPass cfg graph const src truncated
   if firstAccepted.isEmpty || !cfg.verify then return firstGraded
   let binders ← getTargetedBinders const.type
   let mut table := applyAccepted ((Array.range binders.size).map (·, none)) firstAccepted
@@ -659,7 +659,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
     current := .thmInfo
       { name := const.name, levelParams := const.levelParams, type := W, value := val,
         all := [const.name] }
-    let (_, accepted) ← gradedPass cfg graph current src
+    let (_, accepted) ← gradedPass cfg graph current src truncated
     if accepted.isEmpty then
       final? := none
       break
