@@ -197,7 +197,8 @@ references to a hypothesis that would have to change when that hypothesis is wea
 -/
 public def wrapperBinders (wrappers : Array Syntax) : Array Syntax :=
   wrappers.flatMap fun w =>
-    if w.isOfKind ``Parser.Command.variable then w[1].getArgs else #[]
+    -- The binders are the last argument, after the keyword and any visibility modifier.
+    if w.isOfKind ``Parser.Command.variable then w[w.getNumArgs - 1].getArgs else #[]
 
 
 /--

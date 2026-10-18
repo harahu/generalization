@@ -13,7 +13,7 @@ maxSynthPendingDepth = 3
 name = "mathlib"
 scope = "leanprover-community"
 # Match TauCeti upstream main; update lean-toolchain and lake-manifest.json together.
-rev = "3b531c35df33d6bbe64b4e87dec056211d3a5676"
+rev = "2e318faecff7d70d4e0cf8cc875104424a737355"
 
 [[lean_lib]]
 name = "GeneralizationLinter"
