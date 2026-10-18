@@ -612,13 +612,20 @@ public def bridgeRules : Array BridgeRule := #[
       [TopologicalSpace.IsCompletelyPseudoMetrizableSpace X], PolishSpace X",
     proof :=
       `GeneralizationLinter.Test.BridgeRules.polishSpace_of_isCompletelyPseudoMetrizableSpace },
-  -- negation is `0 - x`, and addition is `x - -y`
-  { statement := "∀ (G : Type _) [AddGroup G] [TopologicalSpace G] [ContinuousAdd G] \
-      [ContinuousSub G], IsTopologicalAddGroup G",
+  -- negation is `0 - x`, and addition is `x - -y`; inversion is `1 / x`, and multiplication is
+  -- `x / y⁻¹`
+  { statement := "∀ (G : Type _) [AddGroup G] [TopologicalSpace G] [ContinuousSub G], \
+      IsTopologicalAddGroup G",
     proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalAddGroup_of_continuousSub },
-  { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [ContinuousSub R] [ContinuousNeg R] \
+  { statement := "∀ (G : Type _) [Group G] [TopologicalSpace G] [ContinuousDiv G], \
+      IsTopologicalGroup G",
+    proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalGroup_of_continuousDiv },
+  { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [ContinuousSub R] \
       [ContinuousMul R], IsTopologicalRing R",
     proof := `GeneralizationLinter.Test.BridgeRules.isTopologicalRing_of_continuousSub },
+  -- on a ring, the `ℚ`-action of a `ℚ`-module commutes with multiplication
+  { statement := "∀ (K : Type _) [Ring K] [Module ℚ K], Algebra ℚ K",
+    proof := `GeneralizationLinter.Test.BridgeRules.algebraRat_of_module },
   -- over a ring, a nonarchimedean additive group with continuous multiplication
   { statement := "∀ (R : Type _) [Ring R] [TopologicalSpace R] [NonarchimedeanAddGroup R] \
       [ContinuousMul R], NonarchimedeanRing R",

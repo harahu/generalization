@@ -23,6 +23,7 @@ import Mathlib.Geometry.Manifold.Algebra.SMul
 import Mathlib.Topology.Algebra.Ring.Basic
 import Mathlib.Topology.Algebra.MulAction
 import Mathlib.Algebra.Field.Subfield.Defs
+import Mathlib.Algebra.Module.Rat
 import GeneralizationLinter
 
 /-!
@@ -67,22 +68,35 @@ theorem polishSpace_of_isCompletelyPseudoMetrizableSpace :
   infer_instance
 
 theorem isTopologicalAddGroup_of_continuousSub :
-    ∀ (G : Type u) [AddGroup G] [TopologicalSpace G] [ContinuousAdd G] [ContinuousSub G],
+    ∀ (G : Type u) [AddGroup G] [TopologicalSpace G] [ContinuousSub G],
       IsTopologicalAddGroup G := by
-  intro G _ _ _ _
-  refine { continuous_neg := ?_ }
-  convert (continuous_const (y := (0 : G))).sub continuous_id using 1
-  ext x
+  intro G _ _ _
+  have hneg : Continuous fun x : G => -x := by
+    convert (continuous_const (y := (0 : G))).sub continuous_id using 1
+    ext x
+    simp
+  refine { continuous_add := ?_, continuous_neg := hneg }
+  convert continuous_fst.sub (hneg.comp continuous_snd) using 1
+  ext p
+  simp
+
+theorem isTopologicalGroup_of_continuousDiv :
+    ∀ (G : Type u) [Group G] [TopologicalSpace G] [ContinuousDiv G], IsTopologicalGroup G := by
+  intro G _ _ _
+  have hinv : Continuous fun x : G => x⁻¹ := by
+    convert (continuous_const (y := (1 : G))).div' continuous_id using 1
+    ext x
+    simp
+  refine { continuous_mul := ?_, continuous_inv := hinv }
+  convert continuous_fst.div' (hinv.comp continuous_snd) using 1
+  ext p
   simp
 
 theorem isTopologicalRing_of_continuousSub :
-    ∀ (R : Type u) [Ring R] [TopologicalSpace R] [ContinuousSub R] [ContinuousNeg R]
-      [ContinuousMul R], IsTopologicalRing R := by
-  intro R _ _ _ _ _
-  have : ContinuousAdd R := ⟨by
-    convert continuous_fst.sub (continuous_snd.neg (G := R)) using 1
-    ext p
-    simp⟩
+    ∀ (R : Type u) [Ring R] [TopologicalSpace R] [ContinuousSub R] [ContinuousMul R],
+      IsTopologicalRing R := by
+  intro R _ _ _ _
+  have := isTopologicalAddGroup_of_continuousSub R
   exact {}
 
 theorem nonarchimedeanRing_of_nonarchimedeanAddGroup :
@@ -130,6 +144,9 @@ abbrev algebra_of_isScalarTower (A R : Type*) [CommSemiring A] [CommSemiring R]
     [Module A R] [IsScalarTower A R R] : Algebra A R :=
   Algebra.ofModule smul_mul_assoc fun a r s => by
     rw [mul_comm, smul_mul_assoc, mul_comm]
+
+abbrev algebraRat_of_module (K : Type*) [Ring K] [Module ℚ K] : Algebra ℚ K :=
+  Algebra.ofModule smul_mul_assoc mul_smul_comm
 
 theorem connectedSpace_of_preconnectedSpace (X : Type*) [TopologicalSpace X]
     [PreconnectedSpace X] [Nonempty X] :
@@ -225,7 +242,7 @@ elab "#check_bridge_rules" : command => liftTermElabM do
       throwError "`{r.proof}` proves `{proved}`, not the rule `{statement}`"
   logInfo m!"all {bridgeRules.size} bridge rules are proved"
 
-/-- info: all 32 bridge rules are proved -/
+/-- info: all 34 bridge rules are proved -/
 #guard_msgs in
 #check_bridge_rules
 
@@ -246,5 +263,47 @@ theorem mem_univ_zmod (n : ℕ) [NeZero n] (x : ZMod n) : x ∈ (Finset.univ : F
 set_option linter.generalizeTypeclasses true in
 theorem mem_univ_zmod' (n : ℕ) [NeZero n] (x : ZMod n) : x ∈ (Finset.univ : Finset (ZMod n)) :=
   Finset.mem_univ x
+
+/--
+warning: the `[IsTopologicalAddGroup M]` hypothesis of `GeneralizationLinter.Test.BridgeRules.continuous_sub_add_neg` can be weakened to `ContinuousSub M`.
+
+Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
+-/
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+set_option generalizeTypeclasses.strictnessGuard false in
+theorem continuous_sub_add_neg {M : Type*} [AddGroup M] [TopologicalSpace M]
+    [IsTopologicalAddGroup M] : (Continuous fun p : M × M => p.1 - p.2) ∧ ∀ x : M, x + -x = 0 :=
+  ⟨continuous_sub, add_neg_cancel⟩
+
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+theorem continuous_sub_add_neg' {M : Type*} [AddGroup M] [TopologicalSpace M]
+    [IsTopologicalAddGroup M] : (Continuous fun p : M × M => p.1 - p.2) ∧ ∀ x : M, x + -x = 0 :=
+  ⟨continuous_sub, add_neg_cancel⟩
+
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+theorem continuous_div_mul_inv' {G : Type*} [Group G] [TopologicalSpace G] [IsTopologicalGroup G] :
+    (Continuous fun p : G × G => p.1 / p.2) ∧ ∀ x : G, x * x⁻¹ = 1 :=
+  ⟨continuous_div', mul_inv_cancel⟩
+
+/--
+warning: the `[Algebra ℚ K]` hypothesis of `GeneralizationLinter.Test.BridgeRules.add_smul_rat` can be weakened to `_root_.Module ℚ K`.
+
+Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
+-/
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+set_option generalizeTypeclasses.strictnessGuard false in
+theorem add_smul_rat {K : Type*} [Ring K] [Algebra ℚ K] (q r : ℚ) (x y : K) :
+    (q + r) • x = q • x + r • x ∧ x * y * x - 1 * y = x * (y * x) + -y :=
+  ⟨add_smul q r x, by rw [mul_assoc, one_mul, sub_eq_add_neg]⟩
+
+#guard_msgs in
+set_option linter.generalizeTypeclasses true in
+theorem add_smul_rat' {K : Type*} [Ring K] [Algebra ℚ K] (q r : ℚ) (x y : K) :
+    (q + r) • x = q • x + r • x ∧ x * y * x - 1 * y = x * (y * x) + -y :=
+  ⟨add_smul q r x, by rw [mul_assoc, one_mul, sub_eq_add_neg]⟩
 
 end GeneralizationLinter.Test.BridgeRules
