@@ -185,9 +185,12 @@ public def guardedCandidates (config : LinterConfig) (G : ClassGraph) (declInfo 
 
 public structure SourceIntact where
   /--
-  `true` if no other binder mentions the weakened binder by name, `false` if one does. Note that
-  this is a syntactic scan (`bindersMention`), not a re-elaboration: it does not see a binder whose
-  type the elaborator filled in from the weakened one.
+  `true` if the weakened binder is written in the declaration's own command, in its signature or in
+  a `variable … in` wrapper, and no other binder mentions it by name; `false` otherwise. A section
+  variable declared by an earlier `variable` command is shared with the other declarations of its
+  scope, so weakening it for this declaration can mean splitting that scope. Note that the
+  mention check is a syntactic scan (`bindersMention`), not a re-elaboration: it does not see a
+  binder whose type the elaborator filled in from the weakened one.
   -/
   binders : Bool
   /--
@@ -225,7 +228,13 @@ deriving Inhabited, BEq
 public structure DeclSource where
   body : Syntax
   concl? : Option Syntax := none
+  /-- The binders written in the declaration's command: its signature's and its wrappers'. -/
   binders : Array Syntax := #[]
+  /--
+  The user names of the declaration's binders that its own command declares, as opposed to an
+  earlier `variable` command.
+  -/
+  localBinders : NameSet := {}
 deriving Inhabited
 
 
@@ -440,6 +449,16 @@ public def bindersMention (binders : Array Syntax) (name : Name) : Bool :=
 
 
 /--
+For each targeted binder of `type`, the type of the declaration whose source is `src`, whether
+weakening it leaves the source of the other binders as it is (see `SourceIntact.binders`).
+-/
+def bindersSourceIntact (src : DeclSource) (type : Expr) : MetaM (Array Bool) :=
+  targetedBinderTelescope type fun lds _ => pure <| lds.map fun ld =>
+    src.localBinders.contains ld.userName && !src.binders.isEmpty &&
+      !bindersMention src.binders ld.userName
+
+
+/--
 Run `x` with `maxHeartbeats` set to the lesser of `budget` and the ambient `maxHeartbeats`, treating
 a value of `0` ("unlimited") as larger than any other. So a `budget` of `0` lifts only the linter's
 own limit: the ambient one still applies. `x` runs under `withCurrHeartbeats`, so it gets a fresh
@@ -526,10 +545,7 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
   let candidates ← withHeartbeatBudget truncated cfg.generationHeartbeats #[]
     (guardedCandidates cfg graph const)
   if candidates.isEmpty then return (#[], #[])
-  -- Get the binder names, i.e., for `[inst : Monoid M]`, this would be `` `inst ``. Note that
-  -- `TargetedBinder.className` is the name of the _class_, i.e., for `[inst : Monoid M]`, it would
-  -- be `` `Monoid ``.
-  let binderNames ← targetedBinderTelescope const.type fun lds _ => pure (lds.map (·.userName))
+  let bindersIntact ← bindersSourceIntact src const.type
   let mut accepted : Array (Nat × Array Vertex) := #[]
   let mut graded : Array GradedWeakening := #[]
   for candidate in candidates do
@@ -565,9 +581,7 @@ def gradedPass (cfg : LinterConfig) (graph : ClassGraph) (const : ConstantInfo)
       let conclG ← match src.concl? with
         | some concl' => conclSourceIntact W concl' const.levelParams cfg.buildHeartbeats
         | none => pure false
-      let bindersG := match binderNames[candidate.binder.idx]? with
-        | some n => !src.binders.isEmpty && !bindersMention src.binders n
-        | none => false
+      let bindersG := bindersIntact[candidate.binder.idx]?.getD false
       -- Building a split can reorder its binders to satisfy dependencies. Track and report the
       -- classes in the verified statement's order, so later fixpoint passes address the right
       -- replacements and the printed binders can be elaborated in that order.
@@ -668,7 +682,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
   let conclG ← match src.concl? with
     | some concl' => conclSourceIntact finalW concl' const.levelParams cfg.buildHeartbeats
     | none => pure false
-  let binderNames ← targetedBinderTelescope const.type fun lds _ => pure (lds.map (·.userName))
+  let bindersIntact ← bindersSourceIntact src const.type
   -- `table` lists the targeted binders of `finalW` in order.
   let printed := (← printedTargetedTypes finalW).zip table
   let mut graded : Array GradedWeakening := #[]
@@ -680,9 +694,7 @@ public def gradedWeakenings (cfg : LinterConfig) (graph : ClassGraph) (const : C
       | #[] => WeakeningShape.drop
       | #[v] => WeakeningShape.weaken v
       | vs => WeakeningShape.split vs
-    let bindersG := match binderNames[b.idx]? with
-      | some n => !src.binders.isEmpty && !bindersMention src.binders n
-      | none => false
+    let bindersG := bindersIntact[b.idx]?.getD false
     graded := graded.push
       { candidate := { binder := b, shape },
         grade := .holds { binders := bindersG, concl := conclG, body := bodyG },

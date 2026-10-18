@@ -52,10 +52,6 @@ There's a few additional options available:
   heartbeat budget for the linter's analysis. If $n$ is the number of targeted binders in a given
   declaration and $m$ is the ambient maxHeartbeats, then, for each declaration, the linter will take
   at most $(n + 2) \cdot \min(\texttt{perCandidateHeartbeats}, m)$ heartbeats.
-- `generalizeTypeclasses.acceptOmits : Bool` (`false` by default): whether declarations within `omit
-  … in` commands or within sections with any `omit …` commands should be analyzed by the linter.
-  Default: `false`. **Warning:** For these declarations, the linter cannot guarantee that its
-  suggestions will elaborate.
 
 ### Implementation
 

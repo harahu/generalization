@@ -22,7 +22,7 @@ variable {k : Type u} {k' : Type v} {F : Type w} [Field k] [Field k'] [Field F]
 variable [Algebra k k'] [Algebra k' F] [Algebra k F] [IsScalarTower k k' F]
 
 /--
-warning: the `[Field F]` hypothesis of `GeneralizationLinter.Test.SplitOrder.isAlgebraic_of_trdeg_eq` can be split into `Nontrivial F`, `CommRing F`, `NoZeroDivisors F`.
+warning: the `[Field F]` hypothesis of `GeneralizationLinter.Test.SplitOrder.isAlgebraic_of_trdeg_eq` can be split into `Nontrivial F`, `CommRing F`, `NoZeroDivisors F`, but its binders might have to be modified.
 
 Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
 -/

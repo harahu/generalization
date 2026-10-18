@@ -98,27 +98,27 @@ variable {α : Type} [Child α] (a : α) in
 local notation "𝒪" => Parent.op in
 theorem refused : Parent.op a = Parent.op a := rfl
 
--- Omits remain suppressed by default, even when nested beneath a variable wrapper.
-#guard_msgs in
-variable {α : Type} [Child α] [Inhabited α] (a : α) in
-omit [Inhabited α] in
-theorem omitted : Parent.op a = Parent.op a := rfl
-
+-- An omit beneath a variable wrapper only leaves out a variable; the weakened one is the wrapper's.
 /--
-warning: the `[Child α]` hypothesis of `VariableInTest.acceptedOmit` can be weakened to `Parent α`. This declaration's scope has one or more variables omitted from it, which means that the suggested weakening may require the declaration or its value to be modified, or the omit command to be removed, to be valid.
+warning: the `[Child α]` hypothesis of `VariableInTest.omitted` can be weakened to `Parent α`.
 
 Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
 -/
 #guard_msgs in
 variable {α : Type} [Child α] [Inhabited α] (a : α) in
-set_option generalizeTypeclasses.acceptOmits true in
 omit [Inhabited α] in
-theorem acceptedOmit : Parent.op a = Parent.op a := rfl
+theorem omitted : Parent.op a = Parent.op a := rfl
 
+-- The weakened variable is the section's, shared with the rest of it.
 section
 variable {α : Type} [Child α] [Inhabited α]
 omit [Inhabited α]
 
+/--
+warning: the `[Child α]` hypothesis of `VariableInTest.sectionOmitted` can be weakened to `Parent α`, but its binders might have to be modified.
+
+Note: This linter can be disabled with `set_option linter.generalizeTypeclasses false`
+-/
 #guard_msgs in
 variable (a : α) in
 theorem sectionOmitted : Parent.op a = Parent.op a := rfl
