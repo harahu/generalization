@@ -254,11 +254,14 @@ def wrapperEffectiveOptions? (wrappers : Array Syntax) :
 
 
 /--
-Replays `wrappers` as commands in source order if any of them is an `attribute` wrapper, so that the
-analysis runs in the environment the declaration was elaborated in, with its local attributes, such
-as local instances, simp lemmas, and erased instances. The other wrappers are replayed along with
-them, since they may affect how an attribute is elaborated, such as an `open` that resolves its
-name. Returns `false` if replaying fails, in which case the declaration is not linted.
+Replays `wrappers` as commands in source order if any of them is an `attribute` or `open` wrapper,
+so that the analysis runs in the environment the declaration was elaborated in: with its local
+attributes, such as local instances, simp lemmas, and erased instances, and with the scoped
+instances, simp lemmas, and notation of the namespaces it opens. These are the wrappers whose effect
+lives in the environment; `set_option` and `variable` wrappers only change the scope, which the
+linter reconstructs from them directly. They are replayed along with the others all the same, since
+they may affect how those are elaborated. Returns `false` if replaying fails, in which case the
+declaration is not linted.
 
 Only the environment keeps the effect of the replay, and `runLinters` restores it after each linter.
 
@@ -266,14 +269,18 @@ Only the environment keeps the effect of the replay, and `runLinters` restores i
 **Examples**
 
 ```
-replayAttributeWrappers #[‹open Nat›] = true  -- (nothing replayed)
-replayAttributeWrappers #[‹open Nat›, ‹attribute [local simp] add_comm›] = true
+replayWrappers #[‹set_option pp.all true›] = true  -- (nothing replayed)
+replayWrappers #[‹open scoped Classical›] = true
+  -- (`Classical.propDecidable` is an instance until the linter finishes)
+replayWrappers #[‹open Nat›, ‹attribute [local simp] add_comm›] = true
   -- (`Nat.add_comm` is a simp lemma until the linter finishes)
-replayAttributeWrappers #[‹attribute [local simp] no_such_lemma›] = false
+replayWrappers #[‹attribute [local simp] no_such_lemma›] = false
 ```
 -/
-def replayAttributeWrappers (wrappers : Array Syntax) : CommandElabM Bool := do
-  unless wrappers.any (·.isOfKind ``Parser.Command.attribute) do return true
+def replayWrappers (wrappers : Array Syntax) : CommandElabM Bool := do
+  unless wrappers.any fun w =>
+      w.isOfKind ``Parser.Command.attribute || w.isOfKind ``Parser.Command.open do
+    return true
   let saved ← get
   -- `elabCommand` logs the errors of a failed command instead of throwing them.
   modify fun s => { s with messages := {} }
@@ -405,8 +412,8 @@ public def generalizeTypeclasses : Linter where
       logSkipped effectiveOpts "termination hints or where block"; return
     let hb := Core.getMaxHeartbeats effectiveOpts
     let cfg := LinterConfig.ofOptions effectiveOpts
-    unless ← replayAttributeWrappers wrappers do
-      logSkipped effectiveOpts "attribute wrapper failed to replay"; return
+    unless ← replayWrappers wrappers do
+      logSkipped effectiveOpts "wrapper failed to replay"; return
     for infoTree in ← getInfoTrees do
       -- Theorems to lint.
       let thms := infoTree.getTheorems (← getEnv)

@@ -21,7 +21,10 @@ wrapped declaration.
 public inductive WrapperClassification where
   /--
   "Declaration wrappers" that we can and should "replay", because they may affect our linter's
-  verdict. These are `open … in` and `set_option … in` commands.
+  verdict. These are `open … in` and `set_option … in` commands, which have term counterparts that
+  the linter wraps around the terms it re-elaborates. An `open` also changes the environment, by
+  bringing the scoped declarations of the namespaces it opens into scope, so the linter replays it
+  as a command before analyzing the declaration as well, as for `.attributes`.
   -/
   | replayable
   /--
