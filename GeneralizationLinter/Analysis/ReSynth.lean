@@ -370,12 +370,8 @@ getNthTargetedBinder? #[‹G›, ‹inst›, ‹a›] 1 = none
 ```
 -/
 public def getNthTargetedBinder? (fvars : Array Expr) (n : Nat) : MetaM (Option (Nat × Expr)) := do
-  let mut clsIdx := 0
-  for h : i in [0:fvars.size] do
-    if ← isTargetedBinder (← fvars[i].fvarId!.getDecl) then
-      if clsIdx == n then return some (i, fvars[i])
-      clsIdx := clsIdx + 1
-  return none
+  let some ld := (← targetedDecls fvars)[n]? | return none
+  return (fvars.findIdx? (· == ld.toExpr)).map (·, ld.toExpr)
 
 
 /--

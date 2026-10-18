@@ -359,6 +359,13 @@ public def isTargetedBinder (binder : LocalDecl) : MetaM Bool := do
   | .default => return false
 
 
+/-- The local declarations of those fvars among `xs` that are targeted binders, in order. -/
+public def targetedDecls (xs : Array Expr) : MetaM (Array LocalDecl) :=
+  xs.filterMapM fun x => do
+    let ld ← x.fvarId!.getDecl
+    return if ← isTargetedBinder ld then some ld else none
+
+
 /--
 Given `type` of the form `forall xs, A`, extract the targeted binders of `xs` as local declarations
 `lds` and run `k lds A`.
@@ -372,29 +379,18 @@ K›] ‹C›`, where `‹{R} [CommRing R] {K} [Field K] → C›` and `‹C›`
 -/
 public def targetedBinderTelescope {α : Type} (type : Expr) (k : Array LocalDecl → Expr → MetaM α) :
     MetaM α :=
-  forallTelescope type fun xs concl => do
-    let mut lds : Array LocalDecl := #[]
-    for x in xs do
-      let ld ← x.fvarId!.getDecl
-      if ← isTargetedBinder ld then lds := lds.push ld
-    k lds concl
+  forallTelescope type fun xs concl => do k (← targetedDecls xs) concl
 
 
 /-- Get the targeted binders of a declaration. -/
-public def getTargetedBinders (decl : Expr) : MetaM (Array TargetedBinder) := do
-  forallTelescope decl fun xs _ => do
-    let mut binders : Array TargetedBinder := #[]
-    for x in xs do
-      let ld ← x.fvarId!.getDecl
-      if ← isTargetedBinder ld then
-        let app ← canonKey (← whnf ld.type)
-        binders := binders.push {
-          toKey := app,
-          id := ⟨x.fvarId!⟩,
-          idx := binders.size
-          binderInfo := ld.binderInfo
-        }
-    return binders
+public def getTargetedBinders (decl : Expr) : MetaM (Array TargetedBinder) :=
+  targetedBinderTelescope decl fun lds _ => lds.mapIdxM fun idx ld => do
+    return {
+      toKey := ← canonKey (← whnf ld.type),
+      id := ⟨ld.fvarId⟩,
+      idx
+      binderInfo := ld.binderInfo
+    }
 
 initialize sourceSlotCacheRef : IO.Ref (HashMap Name (UInt64 × Option Nat)) ← IO.mkRef {}
 
@@ -732,14 +728,8 @@ end
 public def getMIChains (binders : Array TargetedBinder) (decl proof : Expr) :
     MetaM (Array MIChain) := do
   forallTelescope decl fun xs concl => do
-    let mut binderIdOf : HashMap FVarId BinderId := {}
-    let mut k := 0
-    for x in xs do
-      let ld ← x.fvarId!.getDecl
-      if ← isTargetedBinder ld then
-        if let some b := binders[k]? then
-          binderIdOf := binderIdOf.insert x.fvarId! b.id
-        k := k + 1
+    let binderIdOf : HashMap FVarId BinderId := ((← targetedDecls xs).zip binders).foldl
+      (init := {}) fun m (ld, b) => m.insert ld.fvarId b.id
     let go : CollectM Unit := do
       for x in xs do walk binderIdOf (← x.fvarId!.getType)
       walk binderIdOf concl
