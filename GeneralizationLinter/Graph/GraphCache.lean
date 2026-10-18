@@ -20,11 +20,16 @@ open Std (HashMap HashSet)
 /-! # Class graph cache -/
 
 /-
-Allocate storage for the result of `ClassGraph.scanInstance` on each instance it has run on, beside
-that instance's `declStamp`. Scanning every instance takes several seconds on all of Mathlib, while
-looking each one up takes milliseconds, so a rebuild scans only the instances it has not seen. Every
-change to the instance set rebuilds the graph: `attribute [instance]`/`[-instance]` on an imported
-constant, `open scoped`/`end` on an imported scoped instance, and each new local instance.
+Allocate storage for the result of `ClassGraph.scanInstance` on each instance it has run on.
+Scanning every instance takes several seconds on all of Mathlib, while looking each one up takes
+milliseconds, so a rebuild scans only the instances it has not seen. Every change to the instance
+set rebuilds the graph: `attribute [instance]`/`[-instance]` on an imported constant, `open
+scoped`/`end` on an imported scoped instance, and each new local instance.
+
+Each result is stored beside the `declStamp` of a local instance, or `0` for an imported one.
+Imports are loaded once per process (the language server restarts a file's worker when its imports
+change), so an imported declaration never changes, and stamping each of the ~40k imported instances
+on every rebuild would only cost time.
 -/
 initialize instanceScanCacheRef :
     IO.Ref (HashMap Name (UInt64 × Option ClassEdge × Option Name)) ← IO.mkRef {}
@@ -78,8 +83,8 @@ public def cachedClassGraph : MetaM ClassGraph := do
   -- Updating the map in place, rather than through the reference, avoids copying it per insertion.
   -- A concurrent rebuild may overwrite the insertions, which costs a rescan, never a wrong result.
   let mut scans ← instanceScanCacheRef.get
-  for name in imported ++ localNames do
-    let stamp ← declStamp name
+  for (name, isLocal) in imported.map (·, false) ++ localNames.map (·, true) do
+    let stamp ← if isLocal then declStamp name else pure 0
     let hit? := scans[name]?.bind fun (s, r) => if s == stamp then some r else none
     let (edge?, subHead?) ← match hit? with
       | some r => pure r
